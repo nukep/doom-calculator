@@ -1,0 +1,15 @@
+{:source-paths ["src/dev"
+                "src/main"
+                "src/test"]
+
+ :dependencies [[reagent "0.8.1"]]
+
+ :builds {:app {:target :browser
+                :output-dir "public/js"
+                :asset-path "/js"
+
+                :modules {:app {:entries [doom-gen.core]
+                                :init-fn doom-gen.core/init}}
+
+                :devtools {:http-root "public"
+                           :http-port 8080}}}}
