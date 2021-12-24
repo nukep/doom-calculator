@@ -3,6 +3,10 @@
             [doomcalc.write-pwad :refer [spit-pwad]]
             [doomcalc.wad-builder :as w]))
 
+;; Set to true if we should render components that enable
+;; resetting the state of drooms and varbits.
+(def RESETTABLE-STATE true)
+
 (defrecord Varbit [var bit])
 (defn varbit [var bit] (Varbit. var bit))
 (defn varbit? [v] (instance? Varbit v))
@@ -363,7 +367,7 @@
 (defn simplify-bdd-remove-undefined [graph]
   (remove-and-replace
    graph
-   (fn [remove-node replace-on-with]
+   (fn [remove-node replace-on-with _remove-root-subgraph]
      (doseq [[node [_var [on0 on1]]] graph]
        (cond
          (= on0 :UNDEFINED)
@@ -639,6 +643,43 @@
          (map simplify-graph)
          (minimize count))))
 
+(defn solve-static-bdd* [node gen-node path-so-far var remaining-vars result-var truth-table]
+  (let [on0 (truth-table (assoc path-so-far var 0))
+        on1 (truth-table (assoc path-so-far var 1))
+
+
+        node-on-0 (cond
+                    (= on0 0) (varbit result-var 0)
+                    (= on0 1) (varbit result-var 1)
+                    (empty? remaining-vars) :UNDEFINED
+                    :else     (gen-node))
+
+        node-on-1 (cond
+                    (= on1 0) (varbit result-var 0)
+                    (= on1 1) (varbit result-var 1)
+                    (empty? remaining-vars) :UNDEFINED
+                    :else     (gen-node))
+
+        bdd-on-0 (if (nil? on0)
+                   (let [% (first remaining-vars)]
+                     (solve-static-bdd* node-on-0 gen-node (assoc path-so-far var 0) % (rest remaining-vars) result-var truth-table))
+                   {})
+
+        bdd-on-1 (if (nil? on0)
+                   (let [% (first remaining-vars)]
+                     (solve-static-bdd* node-on-1 gen-node (assoc path-so-far var 1) % (rest remaining-vars) result-var truth-table))
+                   {})]
+    (merge {node [var [node-on-0 node-on-1]]}
+           bdd-on-0
+           bdd-on-1)))
+
+(defn solve-static-bdd
+  "Solve the BDD, where the variables are in the given order."
+  [vars result-var truth-table]
+  (let [next-node-id (atom 0)
+        gen-node (fn [] (keyword (str "n" (swap! next-node-id inc))))]
+    (let [% (first vars)]
+      (solve-static-bdd* :root gen-node {} % (rest vars) result-var truth-table))))
 
 #_(do
     (defn test-digit-graph [a b c d]
@@ -670,6 +711,7 @@
 
 (def THING_TELEPORTER 0x00E)
 (def SPECIAL_DR_DOOR 1)
+(def SPECIAL_WR_LIFT_ALSO_MONSTERS 88)
 (def SPECIAL_WR_TELEPORT 97)
 (def SPECIAL_S1_DOOR_STAY_OPEN_FAST 112)
 (def LINE_FLAG_BLOCK_PLAYERS_AND_MONSTERS 1)
@@ -690,11 +732,14 @@
 ;; for pinky
 (def DROOM_WIDTH 64)
 (def TELE2_X_WIDTH 60)
-(def TELE2_o_WIDTH 32)
+(def TELE2_I_WIDTH 40)
 (def DIGIT_PIXEL_WIDTH 60)
 (def DIGIT_PIXEL_HEIGHT 48)
 
-(def TELE2_TOTAL_WIDTH (+ TELE2_o_WIDTH 8 TELE2_X_WIDTH 8 TELE2_o_WIDTH))
+;; (def TELE2_o_WIDTH 32)
+
+(def TELE2_TOTAL_WIDTH (+ TELE2_I_WIDTH TELE2_X_WIDTH TELE2_I_WIDTH))
+;; (def TELE2_TOTAL_WIDTH (+ TELE2_o_WIDTH 8 TELE2_X_WIDTH 8 TELE2_o_WIDTH))
 
 ;; Droom diagram:
 ;; _________
@@ -782,15 +827,16 @@
   (w/pop-state))
 
 ;; Tele2 Diagram:
-;; ___________________
-;; |  |  |     |  |  |
-;; |o0|I0|  X  |I1|o1|
-;; |__|__|_____|__|__|
+;; _____________
+;; |  |     |  |
+;; |I0|  X  |I1|
+;; |__|_____|__|
 ;;
 ;; Vertex positions:
-;; C  D  F     K  G  H
+;; C     D     K     H
 ;;          M
-;; B  A  E     L  J  I
+;; B     A     L     I
+
 (defn draw-tele2 [tele2-info {:keys [x y outer-sector
                                      make-door-sector
                                      floor-height ceil-height]}]
@@ -800,12 +846,6 @@
         side-tex "BLAKWAL2"
         door-tex "SPCDOOR3"
 
-        o-sector (w/create-sector {:floor-height floor-height
-                                   :ceil-height ceil-height
-                                   :floor-tex floor-tex
-                                   :ceil-tex ceil-tex})
-        o0-sector o-sector
-        o1-sector o-sector
         i0-sector (make-door-sector (:I0 tele2-info))
         i1-sector (make-door-sector (:I1 tele2-info))
         X-sector (w/create-sector {:floor-height floor-height
@@ -816,25 +856,21 @@
 
         X-width TELE2_X_WIDTH
         X2-width (quot X-width 2)
-        I-width 8
-        o-width TELE2_o_WIDTH
+
+        TT-width TELE2_I_WIDTH
 
         pos (fn [ox oy] [(+ x ox) (+ y oy)])
-        A (pos o-width 0)
         B (pos 0 0)
+        A (pos (+ TT-width) 0)
         C (pos 0 X-width)
-        D (pos o-width X-width)
-        E (pos (+ o-width I-width) 0)
-        F (pos (+ o-width I-width) X-width)
+        D (pos (+ TT-width) X-width)
 
-        G (pos (+ o-width I-width X-width I-width) X-width)
-        H (pos (+ o-width I-width X-width I-width o-width) X-width)
-        I (pos (+ o-width I-width X-width I-width o-width) 0)
-        J (pos (+ o-width I-width X-width I-width) 0)
-        K (pos (+ o-width I-width X-width) X-width)
-        L (pos (+ o-width I-width X-width) 0)
+        H (pos (+ TT-width X-width TT-width) X-width)
+        I (pos (+ TT-width X-width TT-width) 0)
+        K (pos (+ TT-width X-width) X-width)
+        L (pos (+ TT-width X-width) 0)
 
-        M (pos (+ o-width I-width X2-width) X2-width)]
+        M (pos (+ TT-width X2-width) X2-width)]
     ;; Monster or teleporter
     (w/add-thing {:x (first M)
                   :y (second M)
@@ -843,69 +879,48 @@
                           :monster MONSTER_THING
                           :teleporter THING_TELEPORTER)})
 
-    ;; Left o: [
+
+    ;; Left
     (w/set-back {:sector outer-sector
                  :upper-tex side-tex
                  :lower-tex side-tex})
-    (w/set-front {:sector o0-sector})
+    (w/set-front {:sector i0-sector})
     (w/draw-poly A B C D)
 
-    (w/set-back {:sector o0-sector
+    (w/set-back {:sector i0-sector
                  :upper-tex door-tex})
-    (w/set-front {:sector i0-sector})
+    (w/set-front {:sector X-sector
+                  :upper-tex door-tex})
     (w/set-line-tag (:o0 tele2-info))
-    (w/set-line-special 97)
+    (w/set-line-special SPECIAL_WR_TELEPORT)
     (w/draw-poly A D)
     (w/clear-line-tag)
     (w/clear-line-special)
-
-    (w/set-back {:sector outer-sector
-                 :upper-tex side-tex
-                 :lower-tex side-tex})
-    (w/set-front {:sector i0-sector})
-    (w/draw-poly E A)
-    (w/draw-poly D F)
-
-    (w/set-back {:sector i0-sector})
-    (w/set-front {:sector X-sector
-                  :upper-tex door-tex})
-    (w/draw-poly E F)
 
     ;; Top and bottom
     (w/set-back {:sector outer-sector
                  :upper-tex side-tex
                  :lower-tex side-tex})
     (w/set-front {:sector X-sector})
-    (w/draw-poly F K)
-    (w/draw-poly L E)
+    (w/draw-poly D K)
+    (w/draw-poly L A)
 
-    ;; Right o: ]
+    ;; Right
     (w/set-back {:sector outer-sector
                  :upper-tex side-tex
                  :lower-tex side-tex})
-    (w/set-front {:sector o1-sector})
-    (w/draw-poly G H I J)
+    (w/set-front {:sector i1-sector})
+    (w/draw-poly K H I L)
 
-    (w/set-back {:sector o1-sector
+    (w/set-back {:sector i1-sector
                  :upper-tex door-tex})
-    (w/set-front {:sector i1-sector})
-    (w/set-line-tag (:o1 tele2-info))
-    (w/set-line-special SPECIAL_WR_TELEPORT)
-    (w/draw-poly G J)
-    (w/clear-line-tag)
-    (w/clear-line-special)
-
-    (w/set-back {:sector outer-sector
-                 :upper-tex side-tex
-                 :lower-tex side-tex})
-    (w/set-front {:sector i1-sector})
-    (w/draw-poly K G)
-    (w/draw-poly J L)
-
-    (w/set-back {:sector i1-sector})
     (w/set-front {:sector X-sector
                   :upper-tex door-tex})
-    (w/draw-poly K L))
+    (w/set-line-tag (:o1 tele2-info))
+    (w/set-line-special SPECIAL_WR_TELEPORT)
+    (w/draw-poly K L)
+    (w/clear-line-tag)
+    (w/clear-line-special))
   (w/pop-state))
 
 (defn draw-digit-display [wadtags {:keys [x y pixels-w pixels-h outer-sector base-floor-height ceil-height]}]
@@ -1230,7 +1245,7 @@
   ;; put monster tele2s first
   (def parts 
     (let [partitioned (group-by #(and (-> % (first) (= :tele2))
-                                    (-> % (second) :item (= :monster)))
+                                      (-> % (second) :item (= :monster)))
                               parts)]
     (vec (concat (partitioned true) (partitioned false)))))
 
@@ -1368,6 +1383,26 @@
 
     ;; (println (w/wad-data))
 
-    (spit-pwad "out5.wad" (w/wad-data)))
+    (spit-pwad "out6.wad" (w/wad-data)))
 
+  )
+
+(comment
+  (def game-of-life-truth-table
+    (into {}
+          (for [a [0 1] b [0 1] c [0 1]
+                d [0 1] e [0 1] f [0 1]
+                g [0 1] h [0 1] i [0 1]]
+            (let [sum (+ a b c d e f g h i)]
+              [{:a a :b b :c c :d d :e e :f f :g g :h h :i i}
+               (cond
+                 (= sum 3) 1
+                 (= sum 4) e
+                 :else 0)]))))
+  (def game-of-life-bdd
+    (simplify-graph
+     (solve-static-bdd [:a :b :c :d :f :g :h :i :e]
+                       :r
+                       game-of-life-truth-table)))
+  ;; The Game of Life BDD has 26 nodes.
   )
