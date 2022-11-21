@@ -44,7 +44,7 @@
                  (make-wad-data-auto-id* wad-data-atom :sidedefs))))
 
 (defmacro with-new-wad-builder [& body]
-  `(binding [w/*CTX* (w/new-wad-builder)]
+  `(binding [*CTX* (new-wad-builder)]
      ~@body))
 
 (defn get-state*
@@ -61,16 +61,6 @@
   (let [[old _new] (swap-vals! (:state-history *CTX*) pop)
         popped (peek old)]
     (reset! (:state *CTX*) popped)))
-
-(defn add-thing [thing-info]
-  (let [thing-defaults {:x 0
-                        :y 0
-                        :angle 0
-                        ;; health potion
-                        :type 0x7DE}]
-    (add-record :things (merge thing-defaults
-                                   (select-keys thing-info
-                                                (keys thing-defaults))))))
 
 (defn line-tag []
   (get-state* :line-tag 0))
@@ -134,23 +124,121 @@
     (set-state* :back-sidedef-id f)
     (set-state* :front-sidedef-id b)))
 
-(defn draw-poly [& points]
-  (doseq [i (range (dec (count points)))]
-    (let [[x0 y0] (nth points i)
-          [x1 y1] (nth points (inc i))
-          front (front-sidedef-id)
-          back (back-sidedef-id)
-          has-front? (not= front NIL-SIDEDEF)
-          has-back? (not= back NIL-SIDEDEF)]
-      (add-record :linedefs
-                  {:v1 (vertex->id x0 y0)
-                   :v2 (vertex->id x1 y1)
-                   :flags (bit-or (if (and has-front? has-back?) 4 0)
-                                  (line-flags))
-                   :special (line-special)
-                   :sector-tag (line-tag)
-                   :front-sidedef front
-                   :back-sidedef back}))))
+
+(defn get-transform-matrix []
+  (get-state* :transform [[1 0 0]
+                          [0 1 0]]))
+
+(defn set-transform-matrix [matrix]
+  (set-state* :transform matrix))
+
+(defn- multiply-2x3-matrices [a b]
+  ;; we assume the 3rd row of each matrix is [0 0 1]
+  (let [dot (fn [x y] (reduce + (map * x y)))
+        row (fn [m i] (if (= i 2) [0 0 1] (nth m i)))
+        col (fn [m j] (mapv #(nth (row m %) j) (range 3)))]
+    (vec (for [i (range 2)]
+           (vec (for [j (range 3)]
+                  (dot (row a i) (col b j))))))))
+
+
+(defn- det-of-2x3-matrix [[[a b _c]
+                           [d e _f]]]
+  (- (* a e) (* b d)))
+
+(defn- transform-point
+  "Get the transformed point given the transform matrix. Round to integers.
+   
+   Right-multiply the matrix with the column vector [x;y;1]:
+
+   [x']   [m11 m12 m13] [x]
+   [y'] = [m21 m22 m23] [y]
+   [ 1]   [  0   0   1] [1]
+   "
+  [matrix [x y]]
+  ;; we assume the 3rd row of the matrix is [0 0 1]
+  (let [[[m11 m12 m13] [m21 m22 m23]] matrix]
+    [(Math/round (double (+ (* m11 x) (* m12 y) m13)))
+     (Math/round (double (+ (* m21 x) (* m22 y) m23)))]))
+
+(defn transform
+  "Right-multiply the current transform matrix"
+  [matrix]
+  (set-transform-matrix (multiply-2x3-matrices (get-transform-matrix) matrix)))
+
+(defn translate
+  "Translates the transform."
+  [x y]
+  (transform [[1 0 x]
+              [0 1 y]]))
+
+(defn scale
+  "Scales the transform."
+  ([s] (scale s s))
+  ([x y] (transform [[x 0 0]
+                     [0 y 0]])))
+
+(defn rotate
+  "Rotates the transform counter-clockwise."
+  [degrees]
+  (let [radians (* (/ degrees 360) Math/PI 2)
+        c (Math/cos radians)
+        s (Math/sin radians)]
+    (transform [[c (- s) 0]
+                [s c     0]])))
+
+(defn- transform-angle
+  "Calculate the new angle in degrees after it's been transformed. Round to an integer."
+  [matrix degrees]
+  (let [[[m11 m12 _m13]
+         [m21 m22 _m23]] matrix]
+    (if (and (= m12 m21 0) (= m11 m22))
+      ;; don't do anything if matrix is identity or a uniform scale
+      degrees
+
+      (let [radians (* (/ degrees 360) Math/PI 2)
+            c (Math/cos radians)
+            s (Math/sin radians)
+
+            unit-x (+ (* c m11) (* s m12))
+            unit-y (+ (* c m21) (* s m22))
+            new-radians (Math/atan2 unit-y unit-x)]
+        (Math/round (* (/ new-radians (* Math/PI 2)) 360))))))
+
+(defn add-thing [{:keys [x y angle type]
+                  ;; default type is health potion
+                  :or {x 0 y 0 angle 0 type 0x7DE}}]
+  (let [matrix (get-transform-matrix)
+        [x y] (transform-point matrix [x y])
+        angle (transform-angle matrix angle)]
+    (add-record :things {:x x :y y :angle angle :type type})))
+
+(defn draw-poly
+  "Draw connected lines."
+  [& points]
+  ;; if the determinant of the matrix is negative, the orientation is flipped.
+  ;; so we'll reverse the points to preserve orientation
+  (let [matrix (get-transform-matrix)
+        det (det-of-2x3-matrix matrix)
+        points (if (>= det 0) points (reverse points))]
+
+    (doseq [i (range (dec (count points)))]
+      (let [[x0 y0] (transform-point matrix (nth points i))
+            [x1 y1] (transform-point matrix (nth points (inc i)))
+
+            front (front-sidedef-id)
+            back (back-sidedef-id)
+            has-front? (not= front NIL-SIDEDEF)
+            has-back? (not= back NIL-SIDEDEF)]
+        (add-record :linedefs
+                    {:v1 (vertex->id x0 y0)
+                     :v2 (vertex->id x1 y1)
+                     :flags (bit-or (if (and has-front? has-back?) 4 0)
+                                    (line-flags))
+                     :special (line-special)
+                     :sector-tag (line-tag)
+                     :front-sidedef front
+                     :back-sidedef back})))))
 
 (defn debug-svg []
   ;; just draw linedefs
@@ -177,7 +265,12 @@
                     x1 (/ (+ v1x v2x) 2)
                     y1 (/ (+ v1y v2y) 2)
                     x2 (+ x1 dy)
-                    y2 (- y1 dx)]
+                    y2 (- y1 dx)
+
+                    x1 (double x1)
+                    y1 (double y1)
+                    x2 (double x2)
+                    y2 (double y2)]
                 (println (str "  <line x1=\"" x1 "\" y1=\"" y1 "\" x2=\"" x2 "\" y2=\"" y2 "\" stroke=\"black\" />"))))))
 
         vertices @vertices
