@@ -151,3 +151,61 @@
                    :sector-tag (line-tag)
                    :front-sidedef front
                    :back-sidedef back}))))
+
+(defn debug-svg []
+  ;; just draw linedefs
+  (let [data (wad-data)
+        vertices (atom [])
+
+        body
+        (with-out-str
+          (doseq [thing (:things data)]
+            (println "<circle cx=\"" (:x thing) "\" cy=\"" (:y thing) "\" r=\"4\" fill=\"black\" />")
+            #_(println thing))
+          
+          (doseq [linedef (:linedefs data)]
+            (let [[v1x v1y] (nth (:vertexes data) (:v1 linedef))
+                  [v2x v2y] (nth (:vertexes data) (:v2 linedef))]
+              (swap! vertices conj [v1x v1y] [v2x v2y])
+              (println (str "<line x1=\"" v1x "\" y1=\"" v1y "\" x2=\"" v2x "\" y2=\"" v2y "\" stroke=\"black\" />"))
+              ;; draw perpendicular line. rotate (v2-v1) 90 degrees counterclockwise.
+              (let [dx (- v2x v1x)
+                    dy (- v2y v1y)
+                    len (Math/sqrt (+ (* dx dx) (* dy dy)))
+                    dx (* dx (/ 4 len))
+                    dy (* dy (/ 4 len))
+                    x1 (/ (+ v1x v2x) 2)
+                    y1 (/ (+ v1y v2y) 2)
+                    x2 (+ x1 dy)
+                    y2 (- y1 dx)]
+                (println (str "  <line x1=\"" x1 "\" y1=\"" y1 "\" x2=\"" x2 "\" y2=\"" y2 "\" stroke=\"black\" />"))))))
+
+        vertices @vertices
+
+        min-x (reduce min (map first vertices))
+        max-x (reduce max (map first vertices))
+        min-y (reduce min (map second vertices))
+        max-y (reduce max (map second vertices))
+        margin 16
+        min-x (- min-x margin) min-y (- min-y margin)
+        max-x (+ max-x margin) max-y (+ max-y margin)
+        
+        ;; flip y to make Y point up
+        [min-y max-y] [(- max-y) (- min-y)]
+
+        svg (str "<svg viewBox=\"" min-x " " min-y" " (- max-x min-x) " " (- max-y min-y) "\" xmlns=\"http://www.w3.org/2000/svg\">"
+                 "<g transform=\"scale(1 -1)\">"
+                 ;; draw axis lines
+                 (str "<line x1=\"0\" y1=\"" 2048 "\" x2=\"0\" y2=\"" -2048 "\" stroke=\"green\" />")
+                 (str "<line y1=\"0\" x1=\"" 2048 "\" y2=\"0\" x2=\"" -2048 "\" stroke=\"red\" />")
+                 ;; draw everything else
+                 body
+                 "</g>"
+                 "</svg>")]
+    (spit "out.svg" svg)))
+
+(defmacro with-debug-svg [& body]
+  `(with-new-wad-builder
+     (let [out# (do ~@body)]
+       (debug-svg)
+       out#)))
