@@ -70,10 +70,6 @@
                    (pos (* switch-width (inc i)) 0))))
   (w/pop-state))
 
-(defn draw-digit-switches [wadtags info]
-  (draw-switches (take 5 wadtags) info)
-  (draw-switches (drop 5 wadtags) (update info :x #(+ % (* 5 32) 8))))
-
 (defn digit-input [{:keys [x y]}]
   (let [mkvar-i (fn [] (mkvar nil :optimize-same-left-right? false))
         da01 (mkvar-i) da23 (mkvar-i) da45 (mkvar-i) da67 (mkvar-i) da89 (mkvar-i)
@@ -87,9 +83,11 @@
      :draw (fn [var->door-tag var->tele-tag {:keys [outer-sector floor-height ceil-height]}]
              (let [tags [(var->door-tag da01 0) (var->door-tag da01 1) (var->door-tag da23 0) (var->door-tag da23 1)
                          (var->door-tag da45 0) (var->door-tag da45 1) (var->door-tag da67 0) (var->door-tag da67 1)
-                         (var->door-tag da89 0) (var->door-tag da89 1)]]
-               (draw-digit-switches tags
-                                    {:x x, :y y, :outer-sector outer-sector, :base-floor-height floor-height, :ceil-height ceil-height})))}))
+                         (var->door-tag da89 0) (var->door-tag da89 1)]
+                   x2 (+ x (* 5 32) 8)]
+               ;; draw 2 sets of switch arrays: 0 to 4, and 5 to 9
+               (draw-switches (take 5 tags) {:x x,  :y y, :outer-sector outer-sector, :base-floor-height floor-height, :ceil-height ceil-height})
+               (draw-switches (drop 5 tags) {:x x2, :y y, :outer-sector outer-sector, :base-floor-height floor-height, :ceil-height ceil-height})))}))
 
 (defn binary-4-input [{:keys [x y]}]
   (let [b3 (mkvar) b2 (mkvar) b1 (mkvar) b0 (mkvar)]
@@ -530,7 +528,7 @@
     (conj coll x)))
 
 (defn compile-level [level-fn]
-  (let [wadtag-start 10
+  (let [wadtag-start 1
         wadtag-counter (atom (dec wadtag-start))
         new-wadtag (fn [] (swap! wadtag-counter inc))
 
@@ -562,18 +560,21 @@
 
       (w/set-front {:sector interior-sector
                     :middle-tex "STONE2"})
-      (let [main-w 3072 main-h 2048 machines-w 6000 machines-h 5500 gap-w 8 gap-h 8]
+      (let [main-w 4500 main-h 2048 machines-w 6000 machines-h 7500 gap-w 8 gap-h 8]
         (w/draw-poly [0 gap-h] [0 main-h] [main-w main-h] [main-w 0] [0 0]
                      [(- gap-w) 0] [(- gap-w machines-w) 0] [(- gap-w machines-w) machines-h] [(- gap-w) machines-h] [(- gap-w) gap-h]
                      [0 gap-h]))
 
       (doseq [draw (map :draw components)]
         (when draw
-          (draw var->door-tag var->tele-tag {:outer-sector interior-sector :floor-height 0 :ceil-height interior-ceil-height})))
+          (w/push-state)
+          (draw var->door-tag var->tele-tag {:outer-sector interior-sector :floor-height 0 :ceil-height interior-ceil-height})
+          (w/pop-state)))
 
       (let [trees (mapv :trees components)
             trees [trees @pseudo-out-trees]
             trees (t/simplify-trees trees)
+            trees (t/prune-unreachable-trees trees @pseudo-out-vars)
             parts (make-level-parts trees @pseudo-out-vars var->door-tag tree->tele-tag)
 
             make-door-sector (memoize (fn [tag]
@@ -609,7 +610,6 @@
                                   :make-door-sector make-door-sector
                                   :floor-height 32
                                   :ceil-height 92}))))))))
-
 
 (defn bcd-adding-machine
   "An adding machine component.
@@ -655,28 +655,32 @@
         di2 (digit-input-and-display {:x 500 :y 320})
         di3 (digit-input-and-display {:x 900 :y 320})
         di4 (digit-input-and-display {:x 1300 :y 320})
+        di5 (digit-input-and-display {:x 1700 :y 320})
+        di6 (digit-input-and-display {:x 2100 :y 320})
 
-        addm (bcd-adding-machine [(:vars di1) (:vars di2)]
-                                 [(:vars di3) (:vars di4)])]
+        addm (bcd-adding-machine [(:vars di1) (:vars di2) (:vars di3)]
+                                 [(:vars di4) (:vars di5) (:vars di6)])]
     [(player 512 192 90)
-     di1 di2 di3 di4
+     di1 di2 di3 di4 di5 di6
      addm
-     (digit-display {:x 2000 :y 320
+     (digit-display {:x 3000 :y 320
                      :bits (-> addm :vars :sum (nth 0))
                      :base-floor-height 0})
-     (digit-display {:x 2400 :y 320
+     (digit-display {:x 3400 :y 320
                      :bits (-> addm :vars :sum (nth 1))
+                     :base-floor-height 0})
+     (digit-display {:x 3800 :y 320
+                     :bits (-> addm :vars :sum (nth 2))
                      :base-floor-height 0})]))
 
 (defn testlevel []
-  (let [d1 (digit-input {:x 64 :y 200})]
+  (let [d1 (binary-4-input {:x 64 :y 200})]
     [(player 512 192 90)
      d1
-     (variable-display {:x 400 :y 512 :v (-> d1 :vars (nth 0))})
-     #_#_#_
      (variable-display {:x 550 :y 512 :v (-> d1 :vars (nth 0))})
-     (variable-display {:x 700 :y 512 :v (-> d1 :vars (nth 0))})
-     (variable-display {:x 850 :y 512 :v (-> d1 :vars (nth 0))})]))
+     (variable-display {:x 700 :y 512 :v (-> d1 :vars (nth 1))})
+     (variable-display {:x 900 :y 512 :v (-> d1 :vars (nth 2))})
+     (variable-display {:x 1050 :y 512 :v (-> d1 :vars (nth 3))})]))
 
 (comment
   (w/with-debug-svg

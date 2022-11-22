@@ -39,8 +39,9 @@
     :else       [l]))
 
 (defn traverse-trees-uniquely [trees f]
-  (doseq [tree (flatten-vectors trees)]
-    (traverse tree (memoize f))))
+  (let [ff (memoize f)]
+    (doseq [tree (flatten-vectors trees)]
+      (traverse tree ff))))
 
 
 (defn inc-nil [v] (inc (or v 0)))
@@ -125,6 +126,143 @@
         newtrees (into [] (remove (fn [t] (contains? varfns-to-simplify (tree-varfn t)))) trees)]
     (rewrite-trees newtrees actual)))
 
+(defn transpose-adjlist
+  "Transposes the adjaency list.
+  An adjacency list is a map of sets. e.g. {1: #{:a :b :c}, 2...}.
+  a is an m*n list. Returns an n*m list."
+  [a]
+  (let [m-items (set (keys a))
+        n-items (reduce set/union (vals a))]
+    (into {}
+          (remove (comp empty? second))
+          (for [j n-items]
+            [j (into #{}
+                     (mapcat (fn [i] (when (contains? (get a i) j)
+                                       [i])))
+                     m-items)]))))
+
+(defn *-adjlists
+  "Like (0,1)-matrix multiplication, but for adjacency lists.
+  An adjacency list is a map of sets. e.g. {1: #{:a :b :c}, 2...}.
+  Domain is keys, codomain is elements of the set. Domain x Codomain.
+
+  a is an m*n list, b is an n*o list. Returns an m*o list."
+  [a b]
+  (let [m-items (keys a)
+        o-items (reduce set/union (vals b))
+
+        dot (fn [x y] (some? (seq (set/intersection x y))))
+        row (fn [adj i] (get adj i #{}))
+        col (fn [adj j] (into #{}
+                              (comp (filter (fn [[_ v]] (contains? v j)))
+                                    (map first))
+                              adj))]
+    (into {}
+          (remove (comp empty? second))
+          (for [i m-items]
+            [i (into #{}
+                     (mapcat (fn [j] (when (dot (row a i) (col b j))
+                                       [j])))
+                     o-items)]))))
+
+(defn *-adjlists-transposed-second
+  "An optimization of (*-adjlists a b), where b is transposed."
+  [a b]
+  (let [m-items (keys a)
+        o-items (keys b)
+
+        dot (fn [x y] (some? (seq (set/intersection x y))))
+        row (fn [adj i] (get adj i #{}))]
+    (into {}
+          (remove (comp empty? second))
+          (for [i m-items]
+            [i (into #{}
+                     (mapcat (fn [j] (when (dot (row a i) (row b j))
+                                       [j])))
+                     o-items)]))))
+
+(defn +-adjlists
+  [a b]
+  (into {}
+        (for [i (set/union (set (keys a)) (set (keys b)))]
+          [i (set/union (get a i #{}) (get b i #{}))])))
+
+(defn tree->input-output-vars [tree]
+  (let [invars (atom #{})
+        outvars (atom #{})]
+    (traverse tree
+              (fn
+                ([t varfn varval v] (swap! outvars conj varfn))
+                ([t varfn varval l r] (swap! invars conj varfn))))
+    [@invars @outvars]))
+
+(defn prune-unreachable-trees
+  "Keep the trees that eventually output to the provided variables, and remove the rest.
+   Note that this operates on entire trees, and doesn't remove/rewrite subtrees.
+
+   We solve this as follows:
+   
+   Let I be an adjacency matrix of trees to input variables.
+   Let J be an adjacency matrix of output variables to trees.
+
+   K = I * J
+   Let K be an adjacency matrix of trees to trees (from output trees to input trees).
+   
+   L = 1 + K + K*K + K*K*K + ...
+   Let L be an adjacency matrix of trees to trees (from output trees to all eventually reachable input trees).
+   
+   R = reachablevars*J * L
+   Let R be a row vector of trees that are reachable from the variables.
+   reachablevars is a row vector.
+   
+   Simplified:
+   R = (reachablevars*J) * (1 + K + K*K + K*K*K + ...)
+   n = reachablevars*J
+   R = n + nK + nKK + nKKK + ...
+   "
+  [trees reachablevars]
+  (let [tio (map (fn [t] [t (tree->input-output-vars t)])
+                 (flatten-vectors trees))
+        I (into {}
+                (map (fn [[k v]] [k (first v)]))
+                tio)
+        Jt (into {}
+                 (map (fn [[k v]] [k (second v)]))
+                 tio)
+        J (transpose-adjlist Jt)
+
+        K (*-adjlists-transposed-second I Jt)
+        n (*-adjlists {:result (set reachablevars)} J)
+        R (loop [term n
+                 sum term]
+            (let [term (*-adjlists term K)
+                  newsum (+-adjlists sum term)]
+              ;; the sum will eventually converge. end the loop when it does.
+              (if (= sum newsum)
+                sum
+                (recur term newsum))))]
+    (vec (:result R))))
+
+(comment
+  (let [a (mkvar :a), b (mkvar :b), c (mkvar :c), d (mkvar :d), e (mkvar :e)
+        r (mkvar :r), s (mkvar :s), t (mkvar :t), y (mkvar :y), z (mkvar :z)
+
+        trees
+        [(a (b (r 1)
+               (c (s 0)
+                  (s 1)))
+            (r 1))
+         (r (t 1)
+            (a (t 0)
+               (t 1)))
+         (y (z (c 1)
+               (c 0))
+            (d 1))
+         (d (e 0)
+            (e 1))]]
+    (identity
+     (prune-unreachable-trees trees [s t]))))
+
 (defn visit-dot-creator []
   (let [counter (atom 100)
         h (memoize (fn [_] (swap! counter inc)))]
@@ -202,32 +340,3 @@
     (for [tree trees]
       [(count-unique-tree-values tree) tree]))))
 
-
-
-
-(comment
-  (let [a (mkvar [1 2])
-        b (mkvar [3 4])
-        r (mkvar [5 6])]
-    (make-level-parts (make-nand a b r)
-                      100
-                      [r]))
-
-  (let [a (mkvar "a")
-        b (mkvar "b")
-        r (mkvar "r")]
-    (make-and a a r))
-
-  (make-half-adder (mkvar "a") (mkvar "b") (mkvar "s") (mkvar "cout"))
-
-
-  ;; not all the input variables are intended to be realized, so we have to disable some optimizations.
-  (make-digit-input (mapv (fn [s] (mkvar s :optimize-same-left-right? true)) ["da01" "da23" "da45" "da67" "da89"])
-                    (mapv mkvar ["a3" "a2" "a1" "a0"]))
-
-  (make-bcd-adder nil
-                  [(mkvar "b3") (mkvar "b2") (mkvar "b1") (mkvar "b0")]
-                  [(mkvar "d3") (mkvar "d2") (mkvar "d1") (mkvar "d0")]
-                  [(mkvar "s3") (mkvar "s2") (mkvar "s1") (mkvar "s0")]
-                  (mkvar "cout0"))
-  )
