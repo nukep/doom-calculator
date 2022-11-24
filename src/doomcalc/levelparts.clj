@@ -18,9 +18,8 @@
 (def SPECIAL_WR_LIFT_ALSO_MONSTERS 88)
 (def SPECIAL_WR_TELEPORT 97)
 (def SPECIAL_S1_DOOR_STAY_OPEN_FAST 112)
-(def LINE_FLAG_BLOCK_PLAYERS_AND_MONSTERS 1)
-(def LINE_FLAG_BLOCK_MONSTERS 2)
-
+(def LINE_FLAG_BLOCK_PLAYERS_AND_MONSTERS 1)   ;; i.e. ML_BLOCKING
+(def LINE_FLAG_BLOCK_MONSTERS 2)               ;; i.e. ML_BLOCKMONSTERS
 
 
 (def DIGIT_PIXEL_WIDTH 60)
@@ -496,6 +495,132 @@
   (w/pop-state))
 
 
+(defn- interpose-every-n [v coll n]
+  (apply concat (interpose [v] (partition n coll))))
+
+(defn draw-tessellated-machines
+  "To minimize the amount of lines drawn, we will tessellate the machines.
+   We will tessellate the 'tele2' parts as L-shaped triominoes.
+   'droom' parts will fit in any gaps, or where those gaps would go.
+   
+   Example:
+   0 _ 0 _ 0 _
+   X 1 X 1 X 1
+   0 _ 0 _ 0 _
+   X 1 X 1 X 1
+   0 _ 0 _ 0 _
+   X 1 X 1 X 1
+   
+   (where X is the monster or teleport destination, 0 and 1 are doors, and _ is a potential droom)
+   "
+  [parts outer-sector make-door-sector]
+  (let [floor-height 32
+        ceil-height 92
+        floor-tex "MFLR8_1"
+        ceil-tex "MFLR8_1"
+        side-tex "BLAKWAL2"
+        door-tex "SPCDOOR3"
+
+        tele2s (into [] (comp (filter #(= (first %) :tele2)) (map second)) parts)
+        drooms (into [] (comp (filter #(= (first %) :droom)) (map second)) parts)
+        tele2-count (count tele2s)
+        total-count (count parts)
+        wide (int (Math/ceil (Math/sqrt tele2-count)))
+        tall (int (Math/ceil (/ total-count wide)))
+
+        squares
+        (for [i (range (* tall 2))]
+          (for [j (range (* wide 2))]
+            (let [even-i? (= 0 (mod i 2))
+                  even-j? (= 0 (mod j 2))
+                  n (+ (quot j 2) (* wide (quot i 2)))
+                  tele2 (get tele2s n)
+                  droom (get drooms n)]
+              (cond
+                ;; X
+                (and even-i? even-j?)
+                (when tele2
+                  {:sector (w/create-sector {:floor-height floor-height
+                                             :ceil-height ceil-height
+                                             :floor-tex floor-tex
+                                             :ceil-tex ceil-tex
+                                             :tag (:X tele2)})
+                   :draw (fn [] (w/add-thing {:angle 90
+                                              :type (case (:item tele2)
+                                                      :monster MONSTER_THING
+                                                      :teleporter THING_TELEPORTER)}))
+                   :t {:tag (:o0 tele2) :special SPECIAL_WR_TELEPORT :upper-tex door-tex}
+                   :r {:tag (:o1 tele2) :special SPECIAL_WR_TELEPORT :upper-tex door-tex}
+                   :b {}
+                   :l {}})
+
+                ;; 0
+                (and (not even-i?) even-j?)
+                (when tele2
+                  {:sector (make-door-sector (:I0 tele2))})
+
+                ;; 1
+                (and even-i? (not even-j?))
+                (when tele2
+                  {:sector (make-door-sector (:I1 tele2))})
+
+                ;; droom
+                :else
+                (when droom
+                  (let [droom-sector (w/create-sector {:floor-height 80
+                                                       :ceil-height ceil-height
+                                                       :floor-tex floor-tex
+                                                       :ceil-tex ceil-tex})
+                        door-sector (make-door-sector (:Y droom))
+                        szh 8
+                        szw 8
+                        nszw (- szw)
+                        nszh (- szh)
+
+                        A [nszw nszh]
+                        B [nszw szh]
+                        C [szw szh]
+                        D [szw nszh]]
+                    {:sector droom-sector
+                     :draw (fn []
+                             ;; draw a door that monsters can open.
+                             ;; only one linedef needs to have the special (and it's better that it's only one, to avoid spechit overruns in vanilla doom)
+                             (w/draw-poly-ex {:front {:sector door-sector}
+                                              :back {:sector droom-sector :upper-tex door-tex :lower-tex door-tex :special SPECIAL_DR_DOOR}}
+                                             A B)
+                             (w/draw-poly-ex {:front {:sector door-sector}
+                                              :back {:sector droom-sector :upper-tex door-tex :lower-tex door-tex}}
+                                             B C D A)
+                             (w/add-thing {:angle 90 :type THING_TELEPORTER}))
+                     :t {}
+                     :r {}
+                     :b {}
+                     :l {}}))))))
+
+        ;; add spaces for debugging and demonstration purposes
+        add-spaces? true
+
+        squares (if add-spaces?
+                  (mapv (fn [v] (vec (interpose-every-n nil v 2))) squares)
+                  squares)
+        squares (if add-spaces?
+                  (vec (interpose-every-n [] squares 2))
+                  squares)
+
+        sizef (if add-spaces?
+                (fn [i] (let [m (mod i 3)]
+                          (case m
+                            0 64
+                            1 60
+                            2 4)))
+                64)]
+    (w/draw-square-lattice squares
+                           {:sector outer-sector
+                            :upper-tex side-tex
+                            :lower-tex side-tex}
+                           sizef sizef)))
+
+
 (defn pop-v [queue path]
   (let [[x & xs] (get-in queue path)
         queue (assoc-in queue path (vec xs))]
@@ -560,7 +685,7 @@
 
       (w/set-front {:sector interior-sector
                     :middle-tex "STONE2"})
-      (let [main-w 4500 main-h 2048 machines-w 6000 machines-h 7500 gap-w 8 gap-h 8]
+      (let [main-w 4500 main-h 2048 machines-w 8000 machines-h 8000 gap-w 8 gap-h 8]
         (w/draw-poly [0 gap-h] [0 main-h] [main-w main-h] [main-w 0] [0 0]
                      [(- gap-w) 0] [(- gap-w machines-w) 0] [(- gap-w machines-w) machines-h] [(- gap-w) machines-h] [(- gap-w) gap-h]
                      [0 gap-h]))
@@ -592,6 +717,17 @@
             droom-array-length 32
             droom-spacing-x (+ DROOM_WIDTH 16)
             droom-spacing-y (+ DROOM_WIDTH 16)]
+
+
+        (do
+          (w/push-state)
+          (w/translate -512 256)
+          (w/scale -1 1)
+          (draw-tessellated-machines parts
+                                     interior-sector
+                                     make-door-sector)
+          (w/pop-state))
+        #_
         (doseq [[part-type info] parts]
           (case part-type
             :tele2 (let [i (swap! tele2-counter inc)]

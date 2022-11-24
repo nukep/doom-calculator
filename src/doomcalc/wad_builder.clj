@@ -240,6 +240,110 @@
                      :front-sidedef front
                      :back-sidedef back})))))
 
+(defn draw-poly-ex
+  "An extended version of draw-poly that also sets sidedefs and the line tag/special/flags.
+   If the linedef special is defined on the back, the lines are flipped so it can be activated by walking from that side.
+   "
+  [{:keys [front back]} & points]
+
+  (let [special-on-back? (and (not (contains? front :special)) (contains? back :special))]
+    ;; the front tag/special/flags are prioritized. fallback to the back if the front doesn't specify them.
+    (set-line-tag     (or (:tag front) (:tag back) 0))
+    (set-line-special (or (:special front) (:special back) 0))
+    (set-line-flags   (or (:flags front) (:flags back) 0))
+    (set-front (select-keys front [:sector :upper-tex :lower-tex :middle-tex :xoff :yoff]))
+    (set-back  (select-keys back  [:sector :upper-tex :lower-tex :middle-tex :xoff :yoff]))
+    (if special-on-back?
+      (do
+        (flip-sidedefs)
+        (apply draw-poly (reverse points)))
+
+      (apply draw-poly points))))
+
+(defn- lookup-or-constantly [x]
+  (cond
+    (fn? x) x
+    (map? x) x
+    :else (constantly x)))
+
+(defn draw-square-lattice
+  "Draw a 2D array of squares. Adjancent squares share lines.
+   Each square has a :sector, and 4 lines (:t :b :l :r for top, bottom, left, right) with the properties:
+     :upper-tex :lower-tex :middle-tex :xoff :yoff
+   Those lines can have additional line properties:
+     :tag :special :flags
+
+   "
+  [squares outer row-size col-size]
+  (let [row-size (lookup-or-constantly row-size)
+        col-size (lookup-or-constantly col-size)
+        rows (count squares)
+        cols (reduce max (map count squares))
+        row-y (vec (cons 0 (reductions + (map row-size (range rows)))))
+        col-x (vec (cons 0 (reductions + (map col-size (range cols)))))
+        pos (fn [i j] [(get col-x j) (get row-y i)])
+        square-at (fn [i j] (nth (nth squares i nil) j nil))]
+    (doseq [i (range rows)
+            j (range cols)]
+      (when-let [sq (square-at i j)]
+        (let [north-sq (square-at (inc i) j)
+              east-sq  (square-at i       (inc j))
+              south-sq (square-at (dec i) j)
+              west-sq  (square-at i       (dec j))
+
+              current-sector (get sq :sector)
+              north-sector (get north-sq :sector (:sector outer))
+              east-sector  (get east-sq  :sector (:sector outer))
+              south-sector (get south-sq :sector (:sector outer))
+              west-sector  (get west-sq  :sector (:sector outer))
+              draw-inside-square (:draw sq)]
+          ;; if there's no north square, draw the top line
+          ;; if there's no east square, draw the right line
+          ;; always draw the bottom and left lines
+
+          ;; top
+          ;; front is north, back is current
+          (when-not north-sq
+            (draw-poly-ex {:front (if north-sq
+                                    (merge (-> north-sq :b) {:sector north-sector})
+                                    outer)
+                           :back  (merge (-> sq :t) {:sector current-sector})}
+                          (pos (inc i) (inc j)) (pos (inc i) j)))
+          ;; right
+          ;; front is east, back is current
+          (when-not east-sq
+            (draw-poly-ex {:front (if east-sq
+                                    (merge (-> east-sq :l) {:sector east-sector})
+                                    outer)
+                           :back  (merge (-> sq :r) {:sector current-sector})}
+                          (pos i (inc j)) (pos (inc i) (inc j))))
+
+          ;; bottom
+          ;; front is current, back is south
+          (draw-poly-ex {:front (merge (-> sq :b) {:sector current-sector})
+                         :back  (if south-sq
+                                  (merge (-> south-sq :t) {:sector south-sector})
+                                  outer)}
+                        (pos i (inc j)) (pos i j))
+          ;; left
+          ;; front is current, back is west
+
+          (draw-poly-ex {:front (merge (-> sq :l) {:sector current-sector})
+                         :back  (if west-sq
+                                  (merge (-> west-sq :r) {:sector west-sector})
+                                  outer)}
+                        (pos i j) (pos (inc i) j))
+
+          (when draw-inside-square
+            (let [[x1 y1] (pos i j)
+                  [x2 y2] (pos (inc i) (inc j))
+                  x (quot (+ x1 x2) 2)
+                  y (quot (+ y1 y2) 2)]
+              (push-state)
+              (translate x y)
+              (draw-inside-square)
+              (pop-state))))))))
+
 (defn debug-svg []
   ;; just draw linedefs
   (let [data (wad-data)
