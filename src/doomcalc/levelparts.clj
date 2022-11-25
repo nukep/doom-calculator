@@ -494,9 +494,22 @@
     (w/clear-line-special))
   (w/pop-state))
 
+(defn- interpose-many-every-n [lv coll n]
+  (apply concat (interpose lv (partition n coll))))
 
 (defn- interpose-every-n [v coll n]
-  (apply concat (interpose [v] (partition n coll))))
+  (interpose-many-every-n [v] coll n))
+
+(defn get-tessellated-machines-dimensions
+  [tele2s drooms]
+  (let [tele2-count (count tele2s)
+        total-count (max tele2-count (count drooms))
+        cols (int (Math/ceil (Math/sqrt tele2-count)))
+        rows (int (Math/ceil (/ total-count cols)))]
+    {:rows rows
+     :cols cols
+     :width (* cols 128)
+     :height (* rows 128)}))
 
 (defn draw-tessellated-machines
   "To minimize the amount of lines drawn, we will tessellate the machines.
@@ -513,7 +526,7 @@
    
    (where X is the monster or teleport destination, 0 and 1 are doors, and _ is a potential droom)
    "
-  [parts outer-sector make-door-sector]
+  [tele2s drooms outer-sector make-door-sector]
   (let [floor-height 32
         ceil-height 92
         floor-tex "MFLR8_1"
@@ -521,12 +534,10 @@
         side-tex "BLAKWAL2"
         door-tex "SPCDOOR3"
 
-        tele2s (into [] (comp (filter #(= (first %) :tele2)) (map second)) parts)
-        drooms (into [] (comp (filter #(= (first %) :droom)) (map second)) parts)
-        tele2-count (count tele2s)
-        total-count (count parts)
-        wide (int (Math/ceil (Math/sqrt tele2-count)))
-        tall (int (Math/ceil (/ total-count wide)))
+        {:keys [rows cols]} (get-tessellated-machines-dimensions tele2s drooms)
+
+        wide cols
+        tall rows
 
         squares
         (for [i (range (* tall 2))]
@@ -601,10 +612,10 @@
         add-spaces? true
 
         squares (if add-spaces?
-                  (mapv (fn [v] (vec (interpose-every-n nil v 2))) squares)
+                  (mapv (fn [v] (vec (interpose-many-every-n [nil] v 2))) squares)
                   squares)
         squares (if add-spaces?
-                  (vec (interpose-every-n [] squares 2))
+                  (vec (interpose-many-every-n [[]] squares 2))
                   squares)
 
         sizef (if add-spaces?
@@ -619,6 +630,37 @@
                             :upper-tex side-tex
                             :lower-tex side-tex}
                            sizef sizef)))
+
+(defn draw-old-machines
+  "The old method of drawing machines. Uses more lines."
+  [parts outer-sector make-door-sector]
+  (let [tele2-counter (atom -1)
+        droom-counter (atom -1)
+
+        tele2-array-length 16
+        tele2-spacing-x (+ TELE2_TOTAL_WIDTH 24)
+        tele2-spacing-y (+ TELE2_X_WIDTH 24)
+        droom-array-length 32
+        droom-spacing-x (+ DROOM_WIDTH 16)
+        droom-spacing-y (+ DROOM_WIDTH 16)]
+    (doseq [[part-type info] parts]
+      (case part-type
+        :tele2 (let [i (swap! tele2-counter inc)]
+                 (draw-tele2 info
+                             {:x (+ -3000 (* (mod i tele2-array-length) tele2-spacing-x))
+                              :y (+ 64 (* (quot i tele2-array-length) tele2-spacing-y))
+                              :outer-sector outer-sector
+                              :make-door-sector make-door-sector
+                              :floor-height 32
+                              :ceil-height 92}))
+        :droom (let [i (swap! droom-counter inc)]
+                 (draw-droom info
+                             {:x (+ -8200 (* tele2-spacing-x tele2-array-length) (* (mod i droom-array-length) droom-spacing-x))
+                              :y (+ 64 (* (quot i droom-array-length) droom-spacing-y))
+                              :outer-sector outer-sector
+                              :make-door-sector make-door-sector
+                              :floor-height 32
+                              :ceil-height 92}))))))
 
 
 (defn pop-v [queue path]
@@ -683,18 +725,10 @@
 
           components (level-fn)]
 
-      (w/set-front {:sector interior-sector
-                    :middle-tex "STONE2"})
-      (let [main-w 4500 main-h 2048 machines-w 8000 machines-h 8000 gap-w 8 gap-h 8]
-        (w/draw-poly [0 gap-h] [0 main-h] [main-w main-h] [main-w 0] [0 0]
-                     [(- gap-w) 0] [(- gap-w machines-w) 0] [(- gap-w machines-w) machines-h] [(- gap-w) machines-h] [(- gap-w) gap-h]
-                     [0 gap-h]))
-
       (doseq [draw (map :draw components)]
         (when draw
-          (w/push-state)
-          (draw var->door-tag var->tele-tag {:outer-sector interior-sector :floor-height 0 :ceil-height interior-ceil-height})
-          (w/pop-state)))
+          (w/with-pushpop-state
+            (draw var->door-tag var->tele-tag {:outer-sector interior-sector :floor-height 0 :ceil-height interior-ceil-height}))))
 
       (let [trees (mapv :trees components)
             trees [trees @pseudo-out-trees]
@@ -702,50 +736,33 @@
             trees (t/prune-unreachable-trees trees @pseudo-out-vars)
             parts (make-level-parts trees @pseudo-out-vars var->door-tag tree->tele-tag)
 
+            tele2s (into [] (comp (filter #(= (first %) :tele2)) (map second)) parts)
+            drooms (into [] (comp (filter #(= (first %) :droom)) (map second)) parts)
+
             make-door-sector (memoize (fn [tag]
                                         (w/create-sector {:floor-height 32
                                                           :ceil-height 32
                                                           :floor-tex "MFLR8_1"
                                                           :ceil-tex "MFLR8_1"
                                                           :tag tag})))
-            tele2-counter (atom -1)
-            droom-counter (atom -1)
 
-            tele2-array-length 16
-            tele2-spacing-x (+ TELE2_TOTAL_WIDTH 24)
-            tele2-spacing-y (+ TELE2_X_WIDTH 24)
-            droom-array-length 32
-            droom-spacing-x (+ DROOM_WIDTH 16)
-            droom-spacing-y (+ DROOM_WIDTH 16)]
-
-
-        (do
-          (w/push-state)
-          (w/translate -512 256)
-          (w/scale -1 1)
-          (draw-tessellated-machines parts
+            mres (get-tessellated-machines-dimensions tele2s drooms)]
+        (w/with-pushpop-state
+          (w/translate -256 256)
+          (w/translate (- (:width mres)) 0)
+          (draw-tessellated-machines tele2s
+                                     drooms
                                      interior-sector
-                                     make-door-sector)
-          (w/pop-state))
-        #_
-        (doseq [[part-type info] parts]
-          (case part-type
-            :tele2 (let [i (swap! tele2-counter inc)]
-                     (draw-tele2 info
-                                 {:x (+ -3000 (* (mod i tele2-array-length) tele2-spacing-x))
-                                  :y (+ 64 (* (quot i tele2-array-length) tele2-spacing-y))
-                                  :outer-sector interior-sector
-                                  :make-door-sector make-door-sector
-                                  :floor-height 32
-                                  :ceil-height 92}))
-            :droom (let [i (swap! droom-counter inc)]
-                     (draw-droom info
-                                 {:x (+ -8200 (* tele2-spacing-x tele2-array-length) (* (mod i droom-array-length) droom-spacing-x))
-                                  :y (+ 64 (* (quot i droom-array-length) droom-spacing-y))
-                                  :outer-sector interior-sector
-                                  :make-door-sector make-door-sector
-                                  :floor-height 32
-                                  :ceil-height 92}))))))))
+                                     make-door-sector))
+
+        ;; draw the room perimeter after we know the dimensions of what's inside of it
+        (let [main-w 4500 main-h 2048 machines-w (+ (:width mres) 256 256) machines-h (+ (:height mres) 256 256) gap-w 8 gap-h 8]
+          (w/draw-poly-ex
+           {:front {:sector interior-sector
+                    :middle-tex "STONE2"}}
+           [0 gap-h] [0 main-h] [main-w main-h] [main-w 0] [0 0]
+           [(- gap-w) 0] [(- gap-w machines-w) 0] [(- gap-w machines-w) machines-h] [(- gap-w) machines-h] [(- gap-w) gap-h]
+           [0 gap-h]))))))
 
 (defn bcd-adding-machine
   "An adding machine component.
@@ -777,9 +794,9 @@
 
 (defn digit-input-and-display [{:keys [x y]}]
   (let [di (digit-input {:x x :y y})
-        dd (digit-display {:x x :y (+ y 64)
+        dd (digit-display {:x x :y (+ y 256)
                            :bits (:vars di)
-                           :base-floor-height 0})]
+                           :base-floor-height 64})]
     {:trees [(:trees di) (:trees dd)]
      :vars (:vars di)
      :draw (fn [var->door-tag var->tele-tag outer]
