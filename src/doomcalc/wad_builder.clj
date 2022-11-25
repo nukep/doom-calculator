@@ -62,6 +62,12 @@
         popped (peek old)]
     (reset! (:state *CTX*) popped)))
 
+(defmacro with-pushpop-state [& body]
+  `(let [_# (push-state)
+         r# (do ~@body)
+         _# (pop-state)]
+     r#))
+
 (defn line-tag []
   (get-state* :line-tag 0))
 (defn set-line-tag [wadtag]
@@ -103,15 +109,17 @@
   (get-id (:vertex-auto-id *CTX*) [x y]))
 
 (defn sidedef->id [sidedef-info]
-  (let [sidedef-defaults {:xoff 0
-                          :yoff 0
-                          :upper-tex "-"
-                          :middle-tex "-"
-                          :lower-tex "-"
-                          :sector 0}]
-    (get-id (:sidedef-auto-id *CTX*) (merge sidedef-defaults
-                                          (select-keys sidedef-info
-                                                       (keys sidedef-defaults))))))
+  (if (nil? sidedef-info)
+    NIL-SIDEDEF
+    (let [sidedef-defaults {:xoff 0
+                            :yoff 0
+                            :upper-tex "-"
+                            :middle-tex "-"
+                            :lower-tex "-"
+                            :sector 0}]
+      (get-id (:sidedef-auto-id *CTX*) (merge sidedef-defaults
+                                              (select-keys sidedef-info
+                                                           (keys sidedef-defaults)))))))
 
 
 (defn set-back [sidedef-info]
@@ -251,8 +259,12 @@
     (set-line-tag     (or (:tag front) (:tag back) 0))
     (set-line-special (or (:special front) (:special back) 0))
     (set-line-flags   (or (:flags front) (:flags back) 0))
-    (set-front (select-keys front [:sector :upper-tex :lower-tex :middle-tex :xoff :yoff]))
-    (set-back  (select-keys back  [:sector :upper-tex :lower-tex :middle-tex :xoff :yoff]))
+    (if front
+      (set-front (select-keys front [:sector :upper-tex :lower-tex :middle-tex :xoff :yoff]))
+      (set-front nil))
+    (if back
+      (set-back  (select-keys back  [:sector :upper-tex :lower-tex :middle-tex :xoff :yoff]))
+      (set-back nil))
     (if special-on-back?
       (do
         (flip-sidedefs)
@@ -272,9 +284,18 @@
      :upper-tex :lower-tex :middle-tex :xoff :yoff
    Those lines can have additional line properties:
      :tag :special :flags
-
    "
   [squares outer row-size col-size]
+  ;; This function draws a lattice of squares that look like this:
+  ;; i,0 i,1 i,2
+  ;; .   .   .
+  ;; .   .   .
+  ;; |___|___|__. . 2,j
+  ;; |   |   |
+  ;; |___|___|__. . 1,j
+  ;; |   |   |  
+  ;; |___|___|__. . 0,j
+  
   (let [row-size (lookup-or-constantly row-size)
         col-size (lookup-or-constantly col-size)
         rows (count squares)
@@ -343,6 +364,121 @@
               (translate x y)
               (draw-inside-square)
               (pop-state))))))))
+
+(defn- round-down-to-even [v]
+  (if (= 0 (mod v 2)) v (dec v)))
+
+(defn draw-triangle-lattice
+  "Style includes :stride+, :stride0.
+   :stride+ means as i increases, the triangle moves up and to the right (preserving the column's triangle shape).
+   :stride0 means as i increases, the triangle moves up and flips orientation (preserving the column's x position).
+   Default is :stride+"
+  [tris outer base-w height & {:keys [style start-shape]
+                               :or {style :stride+ start-shape :A}}]
+  ;; This function draws a lattice of triangles that look like this:
+  ;;       i,0 i,2 i,4
+  ;;       .   .   .
+  ;;      .   .   .
+  ;;     /\  /\  /\
+  ;;    /__\/__\/__\ . . 1,j
+  ;;   /\  /\  /\  /\
+  ;;  /__\/__\/__\/__\ . . 0,j
+  ;;
+  ;; The lower-left is index at row 0 col 0 (i=0,j=0, or 0,0)
+  ;; as i increases, the row shifts half-way to the right (as per the default :stride+ style).
+  
+  (let [rows (count tris)
+        cols (reduce max (map count tris))
+
+        ;; x,y position of lower-left vertex for "A" triangle at i,j
+        ;; if j is odd, it's rounded down to an even number
+        pos-A (fn [i j] [(+ (* base-w (quot (round-down-to-even j) 2))
+                            (* i (/ base-w 2)))
+                         (* height i)])
+
+        draw-line
+        (fn [v1 v2, f-tri f-side, b-tri b-side]
+          (draw-poly-ex {:front (if f-tri
+                                  (merge (f-side f-tri) {:sector (:sector f-tri)})
+                                  outer)
+                         :back  (if b-tri
+                                  (merge (b-side b-tri) {:sector (:sector b-tri)})
+                                  outer)}
+                        v1 v2))
+
+        avg-points
+        (fn [points]
+          [(quot (reduce + (map first points)) (count points))
+           (quot (reduce + (map second points)) (count points))])
+
+        tri-at-original (fn [i j] (nth (nth tris i nil) j nil))
+
+        ;; the style remaps the triangle coordinate system to the default :stride+.
+        tri-at
+        (case style
+          :stride+ tri-at-original
+          :stride0 (fn [i j] (tri-at-original i (+ i j))))
+
+        col-iter
+        (case style
+          :stride+ (fn [_i] (range cols))
+          :stride0 (fn [i] (range (- i) (- cols i))))
+
+        ;;   r---t
+        ;;  / \ /
+        ;; q---s
+        ;; We draw "A" and "V" triangles
+        draw-A
+        (fn [i j]
+          (when-let [cur (tri-at i j)]
+            (let [q (pos-A i j)
+                  r (pos-A (inc i) j)
+                  s (pos-A i (+ j 2))]
+              (draw-line q r,  cur :l, (tri-at i       (dec j)) :r)
+              (draw-line s q,  cur :s, (tri-at (dec i) (inc j)) :s)
+              (when-not (tri-at i (inc j))
+                ;; right tri is missing
+                (draw-line s r,  nil :l, cur :s))
+              (when-let [draw (:draw cur)]
+                (push-state)
+                (apply translate (avg-points [q r s]))
+                (draw)
+                (pop-state)))))
+        draw-V
+        (fn  [i j]
+          (when-let [cur (tri-at i j)]
+            (let [r (pos-A (inc i) (dec j))
+                  s (pos-A i (inc j))
+                  t (pos-A (inc i) (inc j))]
+              (draw-line s r,  cur :l, (tri-at i (dec j)) :r)
+              (when-not (tri-at (inc i) (dec j))
+                ;; top tri is missing
+                (draw-line t r,  nil :s, cur :s))
+              (when-not (tri-at i (inc j))
+                ;; right tri is missing
+                (draw-line s t,  nil :l, cur :r))
+              (when-let [draw (:draw cur)]
+                (push-state)
+                (apply translate (avg-points [r s t]))
+                (draw)
+                (pop-state)))))]
+
+    (case start-shape
+      :A (doseq [i (range rows)
+                 j (col-iter i)]
+           (if (= 0 (mod j 2))
+             (draw-A i j)
+             (draw-V i j)))
+      :V (do
+           (push-state)
+           (translate (quot base-w 2) 0)
+           (doseq [i (range rows)
+                   j (col-iter i)]
+             (if (= 0 (mod j 2))
+               (draw-V i j)
+               (draw-A i j)))
+           (pop-state)))))
+
 
 (defn debug-svg []
   ;; just draw linedefs
