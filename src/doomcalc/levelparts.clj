@@ -8,6 +8,7 @@
 (def THING_PLAYER1 0x001)
 (def THING_PINKY 3002)
 (def MONSTER_THING THING_PINKY)
+(def MONSTER_RADIUS 30)
 ;; pinky has radius of 30, height of 56
 
 (def THING_ZOMBIEMAN 3004)
@@ -22,8 +23,11 @@
 (def ML_BLOCKMONSTERS 2)   ;; block monsters only
 (def ML_DONTPEGBOTTOM 16)  ;;
 
+;; a size of 60 is the bare minimum for a Pinky to fit teleport somewhere without any problems
+;; i.e. 2 times the radius
+(def MONSTER_TELE_DEST_MIN_WIDTH (* MONSTER_RADIUS 2))
 
-(def DIGIT_PIXEL_WIDTH 60)
+
 (def DIGIT_PIXEL_HEIGHT 48)
 
 ;; A Component couples drawing and logic.
@@ -142,7 +146,7 @@
    {:sector outer-sector
     :lower-tex "STONE2"
     :flags ML_DONTPEGBOTTOM}
-   DIGIT_PIXEL_WIDTH DIGIT_PIXEL_WIDTH))
+   MONSTER_TELE_DEST_MIN_WIDTH MONSTER_TELE_DEST_MIN_WIDTH))
 
 (defn digit-display [{:keys [x y bits base-floor-height]}]
   (let [[b3 b2 b1 b0] bits
@@ -164,6 +168,29 @@
                                       :ceil-height ceil-height
                                       :increment-floor-by DIGIT_PIXEL_HEIGHT}))))}))
 
+(defn glyph
+  "A component that draws a vertical (looking) 2x2 grid with the pattern."
+  [cells {:keys [x y size]
+                    :or {size 64}}]
+  {:draw (fn [_ _ {:keys [outer-sector floor-height ceil-height]}]
+           (let [empty-row (repeat (count (first cells)) '_)
+                 ;; prepend an empty row to render the top
+                 cells (cons empty-row cells)]
+             (w/with-pushpop-state
+               (w/translate x y)
+               (w/draw-square-lattice
+                (for [[i row] (map-indexed vector (reverse cells))]
+                  (for [cell row]
+                    {:sector (w/create-sector {:floor-height (+ floor-height (* size i))
+                                               :ceil-height ceil-height
+                                               :floor-tex "CEIL4_1"
+                                               :ceil-tex "MFLR8_1"
+                                               :light (if (= cell '_) 0 255)})
+                     :t {:lower-tex (if (= cell '_) "ASHWALL2" "ASHWALL2")}}))
+                {:sector outer-sector
+                 :lower-tex "STONE2"
+                 :flags ML_DONTPEGBOTTOM}
+                4 size))))})
 
 (defn player [x y angle]
   {:draw (fn [_ _ _]
@@ -201,7 +228,7 @@
                 {:sector outer-sector
                  :lower-tex side-tex}
 
-                DIGIT_PIXEL_WIDTH DIGIT_PIXEL_WIDTH)))}))
+                MONSTER_TELE_DEST_MIN_WIDTH MONSTER_TELE_DEST_MIN_WIDTH)))}))
 
 (defn make-level-parts [root-trees output-vars var->door-tag tree->tele-tag]
   (let [root-trees (t/flatten-vectors root-trees)
@@ -233,8 +260,6 @@
 (def DROOM_WIDTH 64)
 (def TELE2_X_WIDTH 60)
 (def TELE2_I_WIDTH 40)
-(def DIGIT_PIXEL_WIDTH 60)
-(def DIGIT_PIXEL_HEIGHT 48)
 
 ;; (def TELE2_o_WIDTH 32)
 
@@ -723,7 +748,7 @@
 
 (defn digit-input-and-display [{:keys [x y]}]
   (let [di (digit-input {:x x :y y})
-        dd (digit-display {:x x :y (+ y 256)
+        dd (digit-display {:x x :y (+ y 512)
                            :bits (:vars di)
                            :base-floor-height 64})]
     {:trees [(:trees di) (:trees dd)]
@@ -733,25 +758,40 @@
              ((:draw dd) var->door-tag var->tele-tag outer))}))
 
 (defn level []
-  (let [di1 (digit-input-and-display {:x 100 :y 320})
-        di2 (digit-input-and-display {:x 500 :y 320})
-        di3 (digit-input-and-display {:x 900 :y 320})
-        di4 (digit-input-and-display {:x 1300 :y 320})
-        di5 (digit-input-and-display {:x 1700 :y 320})
-        di6 (digit-input-and-display {:x 2100 :y 320})
+  (let [di1 (digit-input-and-display {:x 100 :y 400})
+        di2 (digit-input-and-display {:x 450 :y 400})
+        #_#_
+        di3 (digit-input-and-display {:x 900 :y 400})
+        di4 (digit-input-and-display {:x 1300 :y 400})
+        di5 (digit-input-and-display {:x 1650 :y 400})
+        #_#_
+        di6 (digit-input-and-display {:x 2100 :y 400})
 
-        addm (bcd-adding-machine [(:vars di1) (:vars di2) (:vars di3)]
-                                 [(:vars di4) (:vars di5) (:vars di6)])]
+        addm (bcd-adding-machine [(:vars di1) (:vars di2) #_(:vars di3)]
+                                 [(:vars di4) (:vars di5) #_(:vars di6)])]
     [(player 512 192 90)
-     di1 di2 di3 di4 di5 di6
+     di1 di2 #_di3 di4 di5 #_di6
      addm
-     (digit-display {:x 3000 :y 320
+     (glyph '[[_ _ x _ _]
+              [_ _ x _ _]
+              [x x x x x]
+              [_ _ x _ _]
+              [_ _ x _ _]]
+            {:x 850 :y 1024})
+     (glyph '[[_ _ _ _ _]
+              [x x x x x]
+              [_ _ _ _ _]
+              [x x x x x]
+              [_ _ _ _ _]]
+            {:x 2048 :y 1024})
+     (digit-display {:x 2500 :y (+ 400 512)
                      :bits (-> addm :vars :sum (nth 0))
-                     :base-floor-height 0})
-     (digit-display {:x 3400 :y 320
+                     :base-floor-height 64})
+     (digit-display {:x 2900 :y (+ 400 512)
                      :bits (-> addm :vars :sum (nth 1))
-                     :base-floor-height 0})
-     (digit-display {:x 3800 :y 320
+                     :base-floor-height 64})
+     #_
+     (digit-display {:x 3800 :y (+ 400 512)
                      :bits (-> addm :vars :sum (nth 2))
                      :base-floor-height 0})]))
 
@@ -766,11 +806,12 @@
 
 (comment
   (w/with-debug-svg
-    (compile-level testlevel))
-
-
-  (w/with-new-wad-builder
     (compile-level testlevel)
+    (count (:linedefs (w/wad-data))))
+
+
+  (w/with-debug-svg
+    (compile-level level)
     (doomcalc.write-pwad/spit-pwad "out2.wad" (w/wad-data)))
-  (compile-level level)
+
   )
