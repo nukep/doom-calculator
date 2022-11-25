@@ -258,7 +258,7 @@
     ;; the front tag/special/flags are prioritized. fallback to the back if the front doesn't specify them.
     (set-line-tag     (or (:tag front) (:tag back) 0))
     (set-line-special (or (:special front) (:special back) 0))
-    (set-line-flags   (or (:flags front) (:flags back) 0))
+    (set-line-flags   (bit-or (:flags front 0) (:flags back 0)))
     (if front
       (set-front (select-keys front [:sector :upper-tex :lower-tex :middle-tex :xoff :yoff]))
       (set-front nil))

@@ -18,8 +18,9 @@
 (def SPECIAL_WR_LIFT_ALSO_MONSTERS 88)
 (def SPECIAL_WR_TELEPORT 97)
 (def SPECIAL_S1_DOOR_STAY_OPEN_FAST 112)
-(def LINE_FLAG_BLOCK_PLAYERS_AND_MONSTERS 1)   ;; i.e. ML_BLOCKING
-(def LINE_FLAG_BLOCK_MONSTERS 2)               ;; i.e. ML_BLOCKMONSTERS
+(def ML_BLOCKING 1)        ;; block players and monsters
+(def ML_BLOCKMONSTERS 2)   ;; block monsters only
+(def ML_DONTPEGBOTTOM 16)  ;;
 
 
 (def DIGIT_PIXEL_WIDTH 60)
@@ -124,72 +125,24 @@
                                (comp (take 16) (map (fn [[i x]] [x (f i)])))
                                (binary-sequence-4)))))
 
-(defn draw-digit-display [wadtags {:keys [x y pixels-w pixels-h outer-sector base-floor-height ceil-height]}]
-  (w/push-state)
-  (let [floor-tex "CEIL4_1"
-        ceil-tex "MFLR8_1"
-        side-tex "STONE2"
-        backdrop-tex "BLAKWAL2"
-
-        increment-floor-by DIGIT_PIXEL_HEIGHT
-        pixel-size DIGIT_PIXEL_WIDTH
-
-        pos (fn [ix iy ox oy] [(+ x ox (* pixel-size ix))
-                               (+ y oy (* pixel-size (- (- pixels-h 1) iy)))])
-
-        last-row-sectors (atom (vec (repeat pixels-w outer-sector)))]
-
-    (w/set-line-flags LINE_FLAG_BLOCK_PLAYERS_AND_MONSTERS)
-
-    (doseq [iy (range pixels-h)]
-      (let [floor-height (+ base-floor-height (* increment-floor-by (- (- pixels-h 1) iy)))
-            row-sectors (mapv (fn [ix]
-                                (let [i (+ (* iy pixels-w) ix)]
-                                  (w/create-sector {:floor-height floor-height
-                                                    :ceil-height ceil-height
-                                                    :floor-tex floor-tex
-                                                    :ceil-tex ceil-tex
-                                                    :light 255
-                                                    :tag (nth wadtags i)})))
-                              (range pixels-w))]
-        (doseq [ix (range pixels-w)]
-          ;; draw "r" shapes (left and top lines)
-          (let [A (pos ix iy 0 0)
-                B (pos ix iy 0 pixel-size)
-                C (pos ix iy pixel-size pixel-size)
-                M (pos ix iy (quot pixel-size 2) (quot pixel-size 2))]
-            (w/add-thing {:x (first M)
-                          :y (second M)
-                          :angle 90
-                          :type THING_TELEPORTER})
-
-            (w/set-front {:sector (nth row-sectors ix)
-                          :lower-tex backdrop-tex})
-            (w/set-back  {:sector (nth row-sectors (dec ix) outer-sector)
-                          :lower-tex side-tex})
-            (w/draw-poly A B)
-
-            (w/set-back {:sector (nth @last-row-sectors ix)
-                         :lower-tex side-tex})
-            (w/draw-poly B C)))
-        ;; draw right-most line for the row
-        (let [A (pos pixels-w iy 0 0)
-              B (pos pixels-w iy 0 pixel-size)]
-          (w/set-front {:sector outer-sector
-                        :lower-tex side-tex})
-          (w/set-back {:sector (last row-sectors)})
-          (w/draw-poly A B))
-        (reset! last-row-sectors row-sectors)))
-
-    ;; draw bottom-most lines for the last column
-    (doseq [ix (range pixels-w)]
-      (let [B (pos ix pixels-h 0 pixel-size)
-            C (pos ix pixels-h pixel-size pixel-size)]
-        (w/set-front {:sector outer-sector
-                      :lower-tex side-tex})
-        (w/set-back {:sector (nth @last-row-sectors ix)})
-        (w/draw-poly B C))))
-  (w/pop-state))
+(defn draw-digit-display [tags {:keys [pixels-w pixels-h outer-sector base-floor-height ceil-height increment-floor-by]}]
+  (w/draw-square-lattice
+   (for [i (reverse (range pixels-h))]
+     (for [j (range pixels-w)]
+       {:sector (w/create-sector {:floor-height (+ base-floor-height (* increment-floor-by (- (- pixels-h 1) i)))
+                                  :ceil-height ceil-height
+                                  :floor-tex "CEIL4_1"
+                                  :ceil-tex "MFLR8_1"
+                                  :light 255
+                                  :tag (nth tags (+ (* i pixels-w) j))})
+        :t {:lower-tex "BLAKWAL2"}
+        :r {:flags ML_BLOCKING}
+        :b {:flags ML_BLOCKING}
+        :draw (fn [] (w/add-thing {:angle 90 :type THING_TELEPORTER}))}))
+   {:sector outer-sector
+    :lower-tex "STONE2"
+    :flags ML_DONTPEGBOTTOM}
+   DIGIT_PIXEL_WIDTH DIGIT_PIXEL_WIDTH))
 
 (defn digit-display [{:keys [x y bits base-floor-height]}]
   (let [[b3 b2 b1 b0] bits
@@ -202,10 +155,14 @@
      :vars {}
      :draw (fn [var->door-tag var->tele-tag {:keys [outer-sector floor-height ceil-height]}]
              (let [tags (mapv #(var->tele-tag % 1) output-vars)]
-               (draw-digit-display tags {:x x :y y :pixels-w digits/digit-width :pixels-h digits/digit-height
-                                         :outer-sector outer-sector
-                                         :base-floor-height (+ floor-height base-floor-height)
-                                         :ceil-height ceil-height})))}))
+               (w/with-pushpop-state
+                 (w/translate x y)
+                 (draw-digit-display tags
+                                     {:pixels-w digits/digit-width :pixels-h digits/digit-height
+                                      :outer-sector outer-sector
+                                      :base-floor-height (+ floor-height base-floor-height)
+                                      :ceil-height ceil-height
+                                      :increment-floor-by DIGIT_PIXEL_HEIGHT}))))}))
 
 
 (defn player [x y angle]
@@ -214,65 +171,37 @@
                          :type THING_PLAYER1}))})
 
 
-;; Vertex positions:
-;; F    E     D
-;;   M0    M1
-;; A    B     C
 (defn variable-display
   "Debugging tool to show a variable result"
   [{:keys [x y v base-floor-height]
     :or {base-floor-height 0}}]
-  (let []
+  (let [floor-tex "CEIL4_1"
+        ceil-tex "MFLR8_1"
+        side-tex "STONE2"]
     {:draw (fn [var->door-tag var->tele-tag {:keys [outer-sector floor-height ceil-height]}]
-             (w/push-state)
-             (w/set-line-flags LINE_FLAG_BLOCK_PLAYERS_AND_MONSTERS)
-             (let [floor-tex "CEIL4_1"
-                   ceil-tex "MFLR8_1"
-                   side-tex "STONE2"
-                   pos (fn [ox oy] [(+ x ox) (+ y oy)])
-                   pixel-size DIGIT_PIXEL_WIDTH
+             (w/with-pushpop-state
+               (w/translate x y)
+               (w/draw-square-lattice
+                [[{:sector (w/create-sector {:floor-height (+ floor-height base-floor-height)
+                                             :ceil-height ceil-height
+                                             :floor-tex floor-tex
+                                             :ceil-tex ceil-tex
+                                             :light 255
+                                             :tag (var->tele-tag v 0)})
+                   :draw (fn [] (w/add-thing {:angle 90 :type THING_TELEPORTER}))
+                   :t {:flags ML_BLOCKING} :b {:flags ML_BLOCKING} :l {:flags ML_BLOCKING} :r {:flags ML_BLOCKING}}
+                  {:sector (w/create-sector {:floor-height (+ floor-height base-floor-height)
+                                             :ceil-height ceil-height
+                                             :floor-tex floor-tex
+                                             :ceil-tex ceil-tex
+                                             :light 255
+                                             :tag (var->tele-tag v 1)})
+                   :draw (fn [] (w/add-thing {:angle 90 :type THING_TELEPORTER}))
+                   :t {:flags ML_BLOCKING} :b {:flags ML_BLOCKING} :l {:flags ML_BLOCKING} :r {:flags ML_BLOCKING}}]]
+                {:sector outer-sector
+                 :lower-tex side-tex}
 
-                   inner-sector-0
-                   (w/create-sector {:floor-height (+ floor-height base-floor-height)
-                                     :ceil-height ceil-height
-                                     :floor-tex floor-tex
-                                     :ceil-tex ceil-tex
-                                     :light 255
-                                     :tag (var->tele-tag v 0)})
-                   inner-sector-1
-                   (w/create-sector {:floor-height (+ floor-height base-floor-height)
-                                     :ceil-height ceil-height
-                                     :floor-tex floor-tex
-                                     :ceil-tex ceil-tex
-                                     :light 255
-                                     :tag (var->tele-tag v 1)})
-
-                   A (pos 0 0)
-                   B (pos pixel-size 0)
-                   C (pos (* pixel-size 2) 0)
-                   D (pos (* pixel-size 2) pixel-size)
-                   E (pos pixel-size pixel-size)
-                   F (pos 0 pixel-size)
-                   M0 (pos (quot pixel-size 2) (quot pixel-size 2))
-                   M1 (pos (+ pixel-size (quot pixel-size 2)) (quot pixel-size 2))]
-
-
-
-               (w/add-thing {:x (first M0) :y (second M0) :angle 90 :type THING_TELEPORTER})
-               (w/add-thing {:x (first M1) :y (second M1) :angle 90 :type THING_TELEPORTER})
-
-               (w/set-front {:sector outer-sector :lower-tex side-tex})
-               (w/set-back  {:sector inner-sector-0})
-               (w/draw-poly E F A B)
-               (w/set-back  {:sector inner-sector-1})
-               (w/draw-poly B C D E)
-               (w/set-front {:sector inner-sector-0})
-               (w/draw-poly E B))
-             (w/pop-state))}))
-
-;; 1. draw everything. this also keeps track of output tags in the process.
-
-;; 2. draw the tele2 and drooms.
+                DIGIT_PIXEL_WIDTH DIGIT_PIXEL_WIDTH)))}))
 
 (defn make-level-parts [root-trees output-vars var->door-tag tree->tele-tag]
   (let [root-trees (t/flatten-vectors root-trees)
