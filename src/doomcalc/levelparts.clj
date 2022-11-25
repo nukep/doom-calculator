@@ -230,7 +230,7 @@
 
                 MONSTER_TELE_DEST_MIN_WIDTH MONSTER_TELE_DEST_MIN_WIDTH)))}))
 
-(defn make-level-parts [root-trees output-vars var->door-tag tree->tele-tag]
+(defn make-level-parts [root-trees output-vars var->door-tag tree->tele-tag tree-has-tele-tag?]
   (let [root-trees (t/flatten-vectors root-trees)
 
         is-root? (set root-trees)
@@ -238,15 +238,19 @@
 
         out (atom [])
         add (fn [type v] (swap! out conj [type v]))]
+    (doseq [tree root-trees]
+      (when (t/out? tree)
+        (when (tree-has-tele-tag? tree)
+          (add :const {:o (tree->tele-tag tree)}))))
     (t/traverse-trees-uniquely
      root-trees
      (fn
        ([t varfn varval outval]
-        (let [Y (tree->tele-tag t)]
-          (when-not (is-output-var? varfn)
+        (when-not (is-output-var? varfn)
+          (let [Y (tree->tele-tag t)]
             (add :droom {:Y Y}))))
        ([t varfn varval l r]
-        (let [X (tree->tele-tag t)
+        (let [X (if (is-root? t) 0 (tree->tele-tag t))
               I0 (var->door-tag varfn 0)
               I1 (var->door-tag varfn 1)
               O0 (tree->tele-tag l)
@@ -454,11 +458,16 @@
 (defn- interpose-every-n [v coll n]
   (interpose-many-every-n [v] coll n))
 
+(defn- round-up-to-nearest-even [x]
+  (if (= 0 (mod x 2))
+    x
+    (inc x)))
+
 (defn get-tessellated-machines-dimensions
-  [tele2s drooms]
-  (let [tele2-count (count tele2s)
-        total-count (max tele2-count (count drooms))
-        cols (int (Math/ceil (Math/sqrt tele2-count)))
+  [consts tele2s drooms]
+  (let [tc-count (+ (quot (round-up-to-nearest-even (count consts)) 2) (count tele2s))
+        total-count (max tc-count (count drooms))
+        cols (int (Math/ceil (Math/sqrt tc-count)))
         rows (int (Math/ceil (/ total-count cols)))]
     {:rows rows
      :cols cols
@@ -480,7 +489,7 @@
    
    (where X is the monster or teleport destination, 0 and 1 are doors, and _ is a potential droom)
    "
-  [tele2s drooms outer-sector make-door-sector]
+  [consts tele2s drooms outer-sector make-door-sector]
   (let [floor-height 32
         ceil-height 92
         floor-tex "MFLR8_1"
@@ -488,23 +497,25 @@
         side-tex "BLAKWAL2"
         door-tex "SPCDOOR3"
 
-        {:keys [rows cols]} (get-tessellated-machines-dimensions tele2s drooms)
-
-        wide cols
-        tall rows
+        {:keys [rows cols]} (get-tessellated-machines-dimensions consts tele2s drooms)
+        consts-count-half (quot (round-up-to-nearest-even (count consts)) 2)
 
         squares
-        (for [i (range (* tall 2))]
-          (for [j (range (* wide 2))]
+        (for [i (range (* rows 2))]
+          (for [j (range (* cols 2))]
             (let [even-i? (= 0 (mod i 2))
                   even-j? (= 0 (mod j 2))
-                  n (+ (quot j 2) (* wide (quot i 2)))
-                  tele2 (get tele2s n)
+                  n (+ (quot j 2) (* cols (quot i 2)))
+                  const-1 (get consts (* n 2))
+                  const-2 (get consts (inc (* n 2)))
+                  const (or const-1 const-2)
+                  tele2 (get tele2s (- n consts-count-half))
                   droom (get drooms n)]
               (cond
                 ;; X
                 (and even-i? even-j?)
-                (when tele2
+                (cond
+                  tele2
                   {:sector (w/create-sector {:floor-height floor-height
                                              :ceil-height ceil-height
                                              :floor-tex floor-tex
@@ -517,17 +528,41 @@
                    :t {:tag (:o0 tele2) :special SPECIAL_WR_TELEPORT :upper-tex door-tex}
                    :r {:tag (:o1 tele2) :special SPECIAL_WR_TELEPORT :upper-tex door-tex}
                    :b {}
-                   :l {}})
+                   :l {}}
+
+                  const
+                  {:sector (w/create-sector {:floor-height floor-height
+                                             :ceil-height ceil-height
+                                             :floor-tex floor-tex
+                                             :ceil-tex ceil-tex})})
 
                 ;; 0
                 (and (not even-i?) even-j?)
-                (when tele2
-                  {:sector (make-door-sector (:I0 tele2))})
+                (cond
+                  tele2
+                  {:sector (make-door-sector (:I0 tele2))}
+
+                  const-1
+                  {:sector (w/create-sector {:floor-height floor-height
+                                             :ceil-height ceil-height
+                                             :floor-tex floor-tex
+                                             :ceil-tex ceil-tex})
+                   :draw (fn [] (w/add-thing {:angle 270 :type MONSTER_THING}))
+                   :b {:tag (:o const-1) :special SPECIAL_WR_TELEPORT}})
 
                 ;; 1
                 (and even-i? (not even-j?))
-                (when tele2
-                  {:sector (make-door-sector (:I1 tele2))})
+                (cond
+                  tele2
+                  {:sector (make-door-sector (:I1 tele2))}
+
+                  const-2
+                  {:sector (w/create-sector {:floor-height floor-height
+                                             :ceil-height ceil-height
+                                             :floor-tex floor-tex
+                                             :ceil-tex ceil-tex})
+                   :draw (fn [] (w/add-thing {:angle 180 :type MONSTER_THING}))
+                   :l {:tag (:o const-2) :special SPECIAL_WR_TELEPORT}})
 
                 ;; droom
                 :else
@@ -657,7 +692,10 @@
         pseudo-out-vars (atom [])
 
         pseudo-out-queue (atom {})
-        tree->tele-tag (memoize (fn [tree] (new-wadtag)))
+        tree-has-tele-tag? (atom #{})
+        tree->tele-tag (memoize (fn [tree]
+                                  (swap! tree-has-tele-tag? conj tree)
+                                  (new-wadtag)))
 
         pseudo-out-tag (fn [varr v]
                          (let [[queue pseudovar] (take-queue-pseudovar @pseudo-out-queue varr v)]
@@ -688,8 +726,9 @@
             trees [trees @pseudo-out-trees]
             trees (t/simplify-trees trees)
             trees (t/prune-unreachable-trees trees @pseudo-out-vars)
-            parts (make-level-parts trees @pseudo-out-vars var->door-tag tree->tele-tag)
+            parts (make-level-parts trees @pseudo-out-vars var->door-tag tree->tele-tag @tree-has-tele-tag?)
 
+            consts (into [] (comp (filter #(= (first %) :const)) (map second)) parts)
             tele2s (into [] (comp (filter #(= (first %) :tele2)) (map second)) parts)
             drooms (into [] (comp (filter #(= (first %) :droom)) (map second)) parts)
 
@@ -700,11 +739,12 @@
                                                           :ceil-tex "MFLR8_1"
                                                           :tag tag})))
 
-            mres (get-tessellated-machines-dimensions tele2s drooms)]
+            mres (get-tessellated-machines-dimensions consts tele2s drooms)]
         (w/with-pushpop-state
           (w/translate -256 256)
           (w/translate (- (:width mres)) 0)
-          (draw-tessellated-machines tele2s
+          (draw-tessellated-machines consts
+                                     tele2s
                                      drooms
                                      interior-sector
                                      make-door-sector))

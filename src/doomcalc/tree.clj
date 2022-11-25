@@ -89,15 +89,28 @@
        1. count variable occurrences
        2. for all with a count of 1, find the ones that are also root nodes and have been used as outputs
           (tracking outputs is important because if nothing writes to the variable, it's probably set from outside the tree)
-       3. keep them in a list and go to them during traversal"
+       3. keep them in a list and go to them during traversal
+     Optimization 2) if any variable output is a root tree, it's a constant. rewrite trees that use the variable.
+   "
   [trees]
   (let [trees (flatten-vectors trees)
+
+        ;; all root trees that are outputs are constants.
+        var-constants (into {}
+                            (comp (filter out?)
+                                  (map (fn [t] [(tree-varfn t) (tree-outval t)])))
+                            trees)
+
         varfn-counts (atom {})
         varfn-as-outputs (atom #{})
         _ (traverse-trees-uniquely trees
                                    (fn
-                                     ([t varfn varval v] (swap! varfn-as-outputs conj varfn))
-                                     ([t varfn varval l r] (swap! varfn-counts update varfn inc-nil))))
+                                     ([t varfn varval v])
+                                     ([t varfn varval l r]
+                                      (swap! varfn-counts update varfn inc-nil)
+                                      ;; only consider outputs with parents
+                                      (when (out? l) (swap! varfn-as-outputs conj (tree-varfn l)))
+                                      (when (out? r) (swap! varfn-as-outputs conj (tree-varfn r))))))
 
         varfns-of-roots (into #{} (comp (filter decision?) (map tree-varfn)) trees)
         root-varfn->leftright (into {}
@@ -120,7 +133,12 @@
                      tree)
 
                    (decision? tree)
-                   tree))
+                   ;; if the tree uses a variable that's a constant, choose its left or right child
+                   (let [constant (get var-constants (tree-varfn tree))]
+                     (cond
+                       (= constant 0) (tree-left tree)
+                       (= constant 1) (tree-right tree)
+                       :else tree))))
 
         ;; remove root nodes that are simplified away
         newtrees (into [] (remove (fn [t] (contains? varfns-to-simplify (tree-varfn t)))) trees)]
