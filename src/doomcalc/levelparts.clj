@@ -113,6 +113,13 @@
                (for [b3 (range 2) b2 (range 2) b1 (range 2) b0 (range 2)]
                  [b3 b2 b1 b0])))
 
+(defn make-base2-digit-at-position [position b0 r]
+  ;; it's just 0 or 1, to show the carry digit
+  (let [f (fn [digit] (let [v (get (get digits/digits digit) position)]
+                        (if (= v '_) 0 1)))]
+    (b0 (r (f 0))
+        (r (f 1)))))
+
 (defn make-base10-digit-at-position [position b3 b2 b1 b0 r]
   (let [f (fn [digit] (let [v (get (get digits/digits digit) position)]
                         (if (= v '_) 0 1)))]
@@ -147,6 +154,25 @@
     :lower-tex "STONE2"
     :flags ML_DONTPEGBOTTOM}
    MONSTER_TELE_DEST_MIN_WIDTH MONSTER_TELE_DEST_MIN_WIDTH))
+
+(defn digit-carry-display [{:keys [x y bit base-floor-height]}]
+  (let [output-vars (mapv (fn [_] (mkvar)) (range digits/digit-positions))
+        trees (vec
+               (for [position (range digits/digit-positions)]
+                 (make-base2-digit-at-position position bit (nth output-vars position))))]
+
+    {:trees trees
+     :vars {}
+     :draw (fn [var->door-tag var->tele-tag {:keys [outer-sector floor-height ceil-height]}]
+             (let [tags (mapv #(var->tele-tag % 1) output-vars)]
+               (w/with-pushpop-state
+                 (w/translate x y)
+                 (draw-digit-display tags
+                                     {:pixels-w digits/digit-width :pixels-h digits/digit-height
+                                      :outer-sector outer-sector
+                                      :base-floor-height (+ floor-height base-floor-height)
+                                      :ceil-height ceil-height
+                                      :increment-floor-by DIGIT_PIXEL_HEIGHT}))))}))
 
 (defn digit-display [{:keys [x y bits base-floor-height]}]
   (let [[b3 b2 b1 b0] bits
@@ -798,19 +824,16 @@
              ((:draw dd) var->door-tag var->tele-tag outer))}))
 
 (defn level []
-  (let [di1 (digit-input-and-display {:x 100 :y 400})
-        di2 (digit-input-and-display {:x 450 :y 400})
-        #_#_
-        di3 (digit-input-and-display {:x 900 :y 400})
-        di4 (digit-input-and-display {:x 1300 :y 400})
-        di5 (digit-input-and-display {:x 1650 :y 400})
-        #_#_
-        di6 (digit-input-and-display {:x 2100 :y 400})
+  (let [di01 (digit-input-and-display {:x 100 :y 400})
+        di00 (digit-input-and-display {:x 450 :y 400})
+        di11 (digit-input-and-display {:x 1300 :y 400})
+        di10 (digit-input-and-display {:x 1650 :y 400})
 
-        addm (bcd-adding-machine [(:vars di1) (:vars di2) #_(:vars di3)]
-                                 [(:vars di4) (:vars di5) #_(:vars di6)])]
+        addm (bcd-adding-machine [(:vars di01) (:vars di00)]
+                                 [(:vars di11) (:vars di10)])]
     [(player 512 192 90)
-     di1 di2 #_di3 di4 di5 #_di6
+     di01 di00
+     di11 di10
      addm
      (glyph '[[_ _ x _ _]
               [_ _ x _ _]
@@ -824,25 +847,23 @@
               [x x x x x]
               [_ _ _ _ _]]
             {:x 2048 :y 1024})
-     (digit-display {:x 2500 :y (+ 400 512)
+     (digit-carry-display {:x 2500 :y (+ 400 512)
+                           :bit (-> addm :vars :carry)
+                           :base-floor-height 64})
+     (digit-display {:x 2800 :y (+ 400 512)
                      :bits (-> addm :vars :sum (nth 0))
                      :base-floor-height 64})
-     (digit-display {:x 2900 :y (+ 400 512)
+     (digit-display {:x 3100 :y (+ 400 512)
                      :bits (-> addm :vars :sum (nth 1))
-                     :base-floor-height 64})
-     #_
-     (digit-display {:x 3800 :y (+ 400 512)
-                     :bits (-> addm :vars :sum (nth 2))
-                     :base-floor-height 0})]))
+                     :base-floor-height 64})]))
 
 (defn testlevel []
   (let [d1 (binary-4-input {:x 64 :y 200})]
     [(player 512 192 90)
      d1
-     (variable-display {:x 550 :y 512 :v (-> d1 :vars (nth 0))})
-     (variable-display {:x 700 :y 512 :v (-> d1 :vars (nth 1))})
-     (variable-display {:x 900 :y 512 :v (-> d1 :vars (nth 2))})
-     (variable-display {:x 1050 :y 512 :v (-> d1 :vars (nth 3))})]))
+     (digit-carry-display {:x 128 :y (+ 400 512)
+                           :bit (-> d1 :vars (nth 0))
+                           :base-floor-height 64})]))
 
 (comment
   (w/with-debug-svg
