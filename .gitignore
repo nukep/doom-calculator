@@ -5,3 +5,5 @@ target/
 .lsp/
 *.wad
 *.bak
+
+!texpatch.wad

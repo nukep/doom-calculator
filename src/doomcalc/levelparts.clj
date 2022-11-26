@@ -30,6 +30,24 @@
 
 (def DIGIT_PIXEL_HEIGHT 48)
 
+;; Vanilla Doom hardcodes the switch texture names and which textures they become.
+;; I'm choosing to override a switch texture in a PWAD.
+;; It falls back gracefully to the built-in SW1EXIT if our texture PWAD isn't used.
+(def DIGIT-SWITCH-TEXTURES-HACK
+  {0 ["SW1EXIT" (* 32 0) (* 72 0)]
+   1 ["SW1EXIT" (* 32 1) (* 72 0)]
+   2 ["SW1EXIT" (* 32 2) (* 72 0)]
+   3 ["SW1EXIT" (* 32 3) (* 72 0)]
+   4 ["SW1EXIT" (* 32 4) (* 72 0)]
+   5 ["SW1EXIT" (* 32 5) (* 72 0)]
+   6 ["SW1EXIT" (* 32 0) (* 72 1)]
+   7 ["SW1EXIT" (* 32 1) (* 72 1)]
+   8 ["SW1EXIT" (* 32 2) (* 72 1)]
+   9 ["SW1EXIT" (* 32 3) (* 72 1)]})
+
+(def DIGIT-SWITCH-TEXTURES DIGIT-SWITCH-TEXTURES-HACK)
+
+
 ;; A Component couples drawing and logic.
 ;; I found that passing lists of variables around like hot potato
 ;; from tree-building procedures to drawing procedures was discouraging and confusing.
@@ -37,42 +55,42 @@
 ;; Vertex positions:
 ;; C               B
 ;; D  E .......... A
-(defn draw-switches [wadtags {:keys [x y outer-sector base-floor-height ceil-height]}]
-  (w/push-state)
-  (let [outer-tex "STONE2"
-        switch-tex "SW1EXIT"
+(defn draw-switches [tags switch-info {:keys [x y outer-sector base-floor-height ceil-height]}]
+  (w/with-pushpop-state
+    (let [outer-tex "STONE2"
 
-        switches (count wadtags)
+          switches (count tags)
 
-        switch-width 32
-        switch-height 64
-        switch-thick 8
+          switch-width 32
+          switch-height 64
+          switch-thick 8
 
-        switch-sector (w/create-sector {:floor-height (+ base-floor-height switch-height)
-                                        :ceil-height ceil-height
-                                        :floor-tex "MFLR8_1"
-                                        :ceil-tex "MFLR8_1"})
+          switch-sector (w/create-sector {:floor-height (+ base-floor-height switch-height)
+                                          :ceil-height ceil-height
+                                          :floor-tex "MFLR8_1"
+                                          :ceil-tex "MFLR8_1"})
 
-        pos (fn [ox oy] [(+ x ox) (+ y oy)])
+          pos (fn [ox oy] [(+ x ox) (+ y oy)])
 
-        A (pos (* switch-width switches) 0)
-        B (pos (* switch-width switches) switch-thick)
-        ;; C (pos (+ switch-width) switch-thick)
-        C (pos 0 switch-thick)
-        D (pos 0 0)]
-    (w/set-front {:sector outer-sector
-                  :lower-tex outer-tex})
-    (w/set-back {:sector switch-sector})
-    (w/draw-poly A B C D)
+          A (pos (* switch-width switches) 0)
+          B (pos (* switch-width switches) switch-thick)
+          C (pos 0 switch-thick)
+          D (pos 0 0)]
+      (w/set-front {:sector outer-sector
+                    :lower-tex outer-tex})
+      (w/set-back {:sector switch-sector})
+      (w/draw-poly A B C D)
 
-    (w/set-front {:sector outer-sector
-                  :lower-tex switch-tex})
-    (w/set-line-special SPECIAL_S1_DOOR_STAY_OPEN_FAST)
-    (doseq [i (range switches)]
-      (w/set-line-tag (nth wadtags i))
-      (w/draw-poly (pos (* switch-width i) 0)
-                   (pos (* switch-width (inc i)) 0))))
-  (w/pop-state))
+      (w/set-line-special SPECIAL_S1_DOOR_STAY_OPEN_FAST)
+      (doseq [i (range switches)]
+        (let [[tex xoff yoff] (switch-info i)]
+          (w/set-line-tag (nth tags i))
+          (w/set-front {:sector outer-sector
+                        :lower-tex tex
+                        :xoff xoff
+                        :yoff yoff})
+          (w/draw-poly (pos (* switch-width i) 0)
+                       (pos (* switch-width (inc i)) 0)))))))
 
 (defn digit-input [{:keys [x y]}]
   (let [mkvar-i (fn [] (mkvar nil :optimize-same-left-right? false))
@@ -88,10 +106,12 @@
              (let [tags [(var->door-tag da01 0) (var->door-tag da01 1) (var->door-tag da23 0) (var->door-tag da23 1)
                          (var->door-tag da45 0) (var->door-tag da45 1) (var->door-tag da67 0) (var->door-tag da67 1)
                          (var->door-tag da89 0) (var->door-tag da89 1)]
-                   x2 (+ x (* 5 32) 8)]
+                   x2 (+ x (* 5 32) 4)]
                ;; draw 2 sets of switch arrays: 0 to 4, and 5 to 9
-               (draw-switches (take 5 tags) {:x x,  :y y, :outer-sector outer-sector, :base-floor-height floor-height, :ceil-height ceil-height})
-               (draw-switches (drop 5 tags) {:x x2, :y y, :outer-sector outer-sector, :base-floor-height floor-height, :ceil-height ceil-height})))}))
+               (draw-switches (take 5 tags) (fn [i] (get DIGIT-SWITCH-TEXTURES i))
+                              {:x x,  :y y, :outer-sector outer-sector, :base-floor-height floor-height, :ceil-height ceil-height})
+               (draw-switches (drop 5 tags) (fn [i] (get DIGIT-SWITCH-TEXTURES (+ i 5)))
+                              {:x x2, :y y, :outer-sector outer-sector, :base-floor-height floor-height, :ceil-height ceil-height})))}))
 
 (defn binary-4-input [{:keys [x y]}]
   (let [b3 (mkvar) b2 (mkvar) b1 (mkvar) b0 (mkvar)]
@@ -735,18 +755,26 @@
         var->tele-tag  (fn [varr v] (pseudo-out-tag varr v))]
     (let [interior-ceil-height 400
 
-          interior-sector (w/create-sector {:floor-height 0
-                                            :ceil-height interior-ceil-height
-                                            :floor-tex "MFLR8_1"
-                                            :ceil-tex "MFLR8_1"
-                                            :tag 0})
+          main-room-sector
+          (w/create-sector {:floor-height 0
+                            :ceil-height interior-ceil-height
+                            :floor-tex "MFLR8_1"
+                            :ceil-tex "MFLR8_1"
+                            :tag 0})
+
+          machines-room-sector
+          (w/create-sector {:floor-height 0
+                            :ceil-height interior-ceil-height
+                            :floor-tex "MFLR8_1"
+                            :ceil-tex "MFLR8_1"
+                            :tag 0})
 
           components (level-fn)]
 
       (doseq [draw (map :draw components)]
         (when draw
           (w/with-pushpop-state
-            (draw var->door-tag var->tele-tag {:outer-sector interior-sector :floor-height 0 :ceil-height interior-ceil-height}))))
+            (draw var->door-tag var->tele-tag {:outer-sector main-room-sector :floor-height 0 :ceil-height interior-ceil-height}))))
 
       (let [trees (mapv :trees components)
             trees [trees @pseudo-out-trees]
@@ -772,17 +800,47 @@
           (draw-tessellated-machines consts
                                      tele2s
                                      drooms
-                                     interior-sector
+                                     machines-room-sector
                                      make-door-sector))
 
         ;; draw the room perimeter after we know the dimensions of what's inside of it
-        (let [main-w 4500 main-h 2048 machines-w (+ (:width mres) 256 256) machines-h (+ (:height mres) 256 256) gap-w 8 gap-h 8]
+        (let [main-w 4500 main-h 2048 machines-w (+ (:width mres) 256 256) machines-h (+ (:height mres) 256 256) gap-w 8 gap-h 8
+              door-w 128 door-overhang 64
+              door-overhang-sector (w/create-sector {:floor-height 0
+                                                     :ceil-height 128
+                                                     :floor-tex "MFLR8_1"
+                                                     :ceil-tex "MFLR8_1"
+                                                     :tag 0})
+              door-sector  (w/create-sector {:floor-height 0 :ceil-height 0})]
           (w/draw-poly-ex
-           {:front {:sector interior-sector
-                    :middle-tex "STONE2"}}
-           [0 gap-h] [0 main-h] [main-w main-h] [main-w 0] [0 0]
-           [(- gap-w) 0] [(- gap-w machines-w) 0] [(- gap-w machines-w) machines-h] [(- gap-w) machines-h] [(- gap-w) gap-h]
-           [0 gap-h]))))))
+           {:front {:sector main-room-sector :middle-tex "STONE2"}}
+           [0 (+ gap-h door-w)] [0 main-h] [main-w main-h] [main-w 0]
+           [door-overhang 0])
+          (w/draw-poly-ex
+           {:front {:sector machines-room-sector :middle-tex "STONE2"}}
+           [(- door-overhang) 0] [(- gap-w machines-w) 0] [(- gap-w machines-w) machines-h] [(- gap-w) machines-h] [(- gap-w) (+ gap-h door-w)])
+
+          ;; right overhang
+          (w/draw-poly-ex
+           {:front {:sector main-room-sector :upper-tex "STONE2"}
+            :back {:sector door-overhang-sector}}
+           [door-overhang 0] [door-overhang (+ gap-h door-w)] [0 (+ gap-h door-w)])
+          ;; left overhang
+          (w/draw-poly-ex
+           {:front {:sector machines-room-sector :upper-tex "STONE2"}
+            :back {:sector door-overhang-sector}}
+           [(- gap-w) (+ gap-h door-w)] [(- door-overhang) (+ gap-h door-w)] [(- door-overhang) 0])
+          (w/draw-poly-ex
+           {:front {:sector door-overhang-sector :middle-tex "STONE2"}}
+           [door-overhang 0] [(- door-overhang) 0])
+          ;; door
+          (w/draw-poly-ex
+           {:front {:sector door-overhang-sector :upper-tex "BIGDOOR2" :special SPECIAL_DR_DOOR}
+            :back {:sector door-sector}}
+           [(- gap-w) (+ gap-h door-w)] [(- gap-w) gap-h] [0 gap-h] [0 (+ gap-h door-w)])
+          (w/draw-poly-ex
+           {:front {:sector door-sector :middle-tex "DOORTRAK" :flags ML_DONTPEGBOTTOM}}
+           [(- gap-w) (+ gap-h door-w)] [0 (+ gap-h door-w)]))))))
 
 (defn bcd-adding-machine
   "An adding machine component.
@@ -814,7 +872,7 @@
 
 (defn digit-input-and-display [{:keys [x y]}]
   (let [di (digit-input {:x x :y y})
-        dd (digit-display {:x x :y (+ y 512)
+        dd (digit-display {:x x :y (+ y 768)
                            :bits (:vars di)
                            :base-floor-height 64})]
     {:trees [(:trees di) (:trees dd)]
@@ -847,13 +905,13 @@
               [x x x x x]
               [_ _ _ _ _]]
             {:x 2048 :y 1024})
-     (digit-carry-display {:x 2500 :y (+ 400 512)
+     (digit-carry-display {:x 2500 :y (+ 400 768)
                            :bit (-> addm :vars :carry)
                            :base-floor-height 64})
-     (digit-display {:x 2800 :y (+ 400 512)
+     (digit-display {:x 2800 :y (+ 400 768)
                      :bits (-> addm :vars :sum (nth 0))
                      :base-floor-height 64})
-     (digit-display {:x 3100 :y (+ 400 512)
+     (digit-display {:x 3100 :y (+ 400 768)
                      :bits (-> addm :vars :sum (nth 1))
                      :base-floor-height 64})]))
 
@@ -867,7 +925,7 @@
 
 (comment
   (w/with-debug-svg
-    (compile-level testlevel)
+    (compile-level level)
     (count (:linedefs (w/wad-data))))
 
 
