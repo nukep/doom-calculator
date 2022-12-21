@@ -5,14 +5,14 @@
             [doomcalc.components :as c]))
 
 (defn level []
-  (let [di01 (c/digit-input-and-display {:x 100 :y 400})
-        di00 (c/digit-input-and-display {:x 450 :y 400})
-        di11 (c/digit-input-and-display {:x 1300 :y 400})
-        di10 (c/digit-input-and-display {:x 1650 :y 400})
+  (let [di01 (c/digit-input-and-display {:x 388 :y 400})
+        di00 (c/digit-input-and-display {:x 738 :y 400})
+        di11 (c/digit-input-and-display {:x 1588 :y 400})
+        di10 (c/digit-input-and-display {:x 1938 :y 400})
 
         addm (c/bcd-adding-machine [(:vars di01) (:vars di00)]
                                    [(:vars di11) (:vars di10)])]
-    [(c/player 512 192 90)
+    [(c/player 688 64 90)
      di01 di00
      di11 di10
      addm
@@ -21,32 +21,34 @@
                 [x x x x x]
                 [_ _ x _ _]
                 [_ _ x _ _]]
-              {:x 850 :y 1024})
+              {:x 1138 :y 1536})
      (c/glyph '[[_ _ _ _ _]
                 [x x x x x]
                 [_ _ _ _ _]
                 [x x x x x]
                 [_ _ _ _ _]]
-              {:x 2048 :y 1024})
-     (c/digit-carry-display {:x 2500 :y (+ 400 768)
+              {:x 2336 :y 1536})
+     (c/digit-carry-display {:x 2788 :y (+ 400 768)
                              :bit (-> addm :vars :carry)
                              :base-floor-height 64})
-     (c/digit-display {:x 2800 :y (+ 400 768)
+     (c/digit-display {:x 3088 :y (+ 400 768)
                        :bits (-> addm :vars :sum (nth 0))
                        :base-floor-height 64})
-     (c/digit-display {:x 3100 :y (+ 400 768)
+     (c/digit-display {:x 3388 :y (+ 400 768)
                        :bits (-> addm :vars :sum (nth 1))
                        :base-floor-height 64})]))
 
-(defn testlevel []
-  (let [d1 (c/binary-4-input {:x 64 :y 200})]
-    [(c/player 512 192 90)
-     d1
-     (c/digit-carry-display {:x 128 :y (+ 400 512)
-                             :bit (-> d1 :vars (nth 0))
-                             :base-floor-height 64})]))
+
+(defn summarize-wad-data [data]
+  (println (str " Vertex count: " (count (:vertexes data))))
+  (println (str "Linedef count: " (count (:linedefs data))))
+  (println (str "Sidedef count: " (count (:sidedefs data))))
+  (println (str " Sector count: " (count (:sectors data))))
+  (println (str "  Thing count: " (count (:things data)))))
 
 (defn -main []
   (w/with-debug-svg
     (compile-machines level)
-    (doomcalc.write-pwad/spit-pwad "out.wad" (w/wad-data))))
+    (summarize-wad-data (w/wad-data))
+    (spit-pwad "out.wad" (w/wad-data))))
+

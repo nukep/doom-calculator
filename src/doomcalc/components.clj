@@ -289,9 +289,10 @@
          :vars {:carry cin
                 :sum (vec (reverse vars))}}))))
 
-(defn digit-input-and-display [{:keys [x y]}]
+(defn digit-input-and-display [{:keys [x y distance]
+                                :or {distance 768}}]
   (let [di (digit-input {:x x :y y})
-        dd (digit-display {:x x :y (+ y 768)
+        dd (digit-display {:x x :y (+ y distance)
                            :bits (:vars di)
                            :base-floor-height 64})]
     {:trees [(:trees di) (:trees dd)]
