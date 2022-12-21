@@ -3,6 +3,4 @@
   :repl-options {:init-ns doomcalc.core}
   :source-paths ["src"]
   
-  :main doomcalc.core/-main
-  
-  :cljfmt {:indents {doomcalc.core/remove-and-replace [[:inner 0]]}})
+  :main doomcalc.core/-main)
