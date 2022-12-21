@@ -4,6 +4,8 @@
 
 This project builds a Doom WAD that implements an adding machine! It is written in Clojure.
 
+I go into depth in my blog post: https://blog.otterstack.com/posts/202212-doom-calculator/
+
 
 ## How to build the WAD map
 
